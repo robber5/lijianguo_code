@@ -2495,6 +2495,7 @@ void *mp4_write_head_h264(const wchar_t *mp4FilePath, const wchar_t *tmpMp2Path,
 	fpMp2 = mp4_fopen(tmpMp2Path, L"wb+");
 	if (NULL == fpMp2)
 	{
+		printf("open tmppath error\n");
 		fclose(fpMp4);
 		free(l_mp4Mov);
 		return NULL;

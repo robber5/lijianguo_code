@@ -1,6 +1,6 @@
 #include <stdio.h>
-#include "record_search.h"
 #include <stdlib.h>
+#include "record_search.h"
 
 int main()
 {
@@ -15,7 +15,7 @@ int main()
 	}
 	char* filelist[3] = {(char *)"1.mp4", (char *)"3.mp4", (char *)"5.mp4"};
 	video_search_init();
-	get_video_filelist();
+	refresh_video_filelist();
 	show_filelist();
 	search_video_by_name((char *)"3.mp4");
 	delete_file_by_name(filelist, 3);

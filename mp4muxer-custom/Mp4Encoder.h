@@ -41,8 +41,8 @@ public:
 	virtual ~Mp4Encoder();
 
 public:
-	int32_t writeAudioFrame(int8_t *audioFrame, int32_t frameSize, int32_t timeStamp);
-	int32_t writeVideoFrame(int8_t *videoFrame, int32_t frameSize, int32_t timeStamp);
+	int32_t writeAudioFrame(uint8_t *audioFrame, int32_t frameSize, int32_t timeStamp);
+	int32_t writeVideoFrame(uint8_t *videoFrame, int32_t frameSize, int32_t timeStamp);
 
 	int32_t openMp4Encoder();
 	int32_t closeMp4Encoder();

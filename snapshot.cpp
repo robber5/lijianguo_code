@@ -7,7 +7,6 @@
 #include <fcntl.h>   
 #include <sys/ioctl.h>   
 #include <unistd.h> 
-#include "app.h"
 #include "video_encoder.h"
 
 using namespace detu_media;

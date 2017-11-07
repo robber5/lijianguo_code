@@ -1,3 +1,6 @@
+#ifndef OPEN_LIST
+#define OPEN_LIST
+
 //1.节点定义。虽然名称list_head，但是它既是双向链表的表头，也代表双向链表的节点。  
 typedef struct list_head {  
     struct list_head *next, *prev;  
@@ -89,7 +92,4 @@ list_for_each_safe(pos, afterpos, head)通常删除节点的场景。
   
 #define list_for_each_safe(pos, afterpos, head) for (pos = (head)->next, afterpos = pos->next; pos != (head); pos = afterpos, afterpos = pos->next)
 
-
-
-
-
+#endif

@@ -4,29 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "record_list.h"
+#include "record_search.h"
 
-#define VIDEO_DIR "/home/lijianguo/test"
-
-typedef struct filelist_s
-{
-	char filename[32];
-	LIST_HEAD_S list;
-
-}FILELIST_S;
-
-typedef struct fileinfo_s
-{
-	unsigned int file_num;
-	FILELIST_S *listhead;
-} FILEINFO_S;
-
-int video_search_init();
-void show_filelist();
-int get_video_filelist();
-void search_video_by_name(char *filename);
-void delete_file_by_name(char **filename, int count);
-int video_search_exit();
 
 static DIR *g_video_dir;
 static FILEINFO_S *g_fileinfo;
@@ -38,10 +17,14 @@ static FILEINFO_S *g_fileinfo;
 	2.全部显示
 	3.显示某天
 */
-int get_video_filelist()
+int refresh_video_filelist()
 {
 	struct dirent *file;
 	FILELIST_S *filelist_node;
+	int filename_num_tmp = 0;
+	int filename_num_max = 0;
+
+	filelist_clear_up();
 	if (NULL == g_video_dir)
 	{
 		if ((g_video_dir = opendir(VIDEO_DIR)) == NULL)
@@ -59,9 +42,7 @@ int get_video_filelist()
 		{
 			//printf("file%d：%s",i, file->d_name);
 			//i++;
-			filelist_node = (FILELIST_S *)malloc(sizeof(FILELIST_S));
-			strcpy(filelist_node->filename, file->d_name);
-			list_add_tail(&filelist_node->list, &g_fileinfo->listhead->list);
+			inset_video_by_name(file->d_name);
 			g_fileinfo->file_num++;
 		}
 	}
@@ -69,7 +50,93 @@ int get_video_filelist()
 	if (closedir(g_video_dir))
 	{
 		perror("opendir video_dir");
+		return -1;
 	}
+	return 0;
+}
+
+int get_filename_prefix_number(char *filename)
+{
+	char *p = NULL, *fileprename = NULL, filename_bk[FILE_NAME_LEN_MAX] = {'\0'};
+	strncpy(filename_bk, filename, FILE_NAME_LEN_MAX);
+	fileprename = strtok_r(filename_bk, ".", &p);
+	return (atoi(fileprename));
+}
+
+
+/*
+	通过文件名的方式添加录像文件到链表 ,按照日期从小到大排序
+
+*/
+
+int inset_video_by_name(char *filename)
+{
+	int ret = 0;
+	LIST_HEAD_S *pos = NULL, *nextpos = NULL;
+	FILELIST_S *filelist_node = NULL, *filelist_node_tmp = NULL, *filelist_node_next = NULL;
+	int filename_num = 0, filename_num_tmp = 0, filename_num_next = 0;
+
+	if (0 == g_fileinfo->file_num)
+	{
+		ret = 1;
+		pos = &g_fileinfo->listhead->list;
+	}
+	else
+	{
+		filename_num = get_filename_prefix_number(filename);
+		list_for_each_safe(pos, nextpos, &g_fileinfo->listhead->list)
+		{
+			filelist_node_tmp = list_entry(pos, FILELIST_S, list);
+			filename_num_tmp = get_filename_prefix_number(filelist_node_tmp->filename);
+
+			if (filename_num <= filename_num_tmp)
+			{
+				ret = 1;
+				break;
+			}
+			else
+			{
+				if ((&g_fileinfo->listhead->list) != nextpos)
+				{
+					filelist_node_next = list_entry(nextpos, FILELIST_S, list);
+					filename_num_next = get_filename_prefix_number(filelist_node_next->filename);
+					if ( filename_num <= filename_num_next)
+					{
+						ret = 1;
+						break;
+					}
+				}
+				else
+				{
+					ret = 1;
+					break;
+				}
+			}
+		}
+	}
+
+	if (1 == ret)
+	{
+		filelist_node = (FILELIST_S *)malloc(sizeof(FILELIST_S));
+		memset(filelist_node, 0, sizeof(filelist_node));
+		strncpy(filelist_node->filename, filename, FILE_NAME_LEN_MAX);
+		if (filename_num > filename_num_tmp)
+		{
+			list_add_forward(&filelist_node->list, pos);
+		}
+		else
+		{
+			list_add_tail(&filelist_node->list, pos);
+		}
+
+	}
+	else
+	{
+		printf("illegal filename:%s!\n", filename);
+	}
+
+	return ret;
+	
 }
 
 /*
@@ -107,7 +174,7 @@ void delete_file_by_name(char **filename, int count)
 	FILELIST_S *filelist_node = NULL;
 	LIST_HEAD_S *pos, *next;
 	int i = 0, remain = count;
-	char cmd[32] = {'\0'};
+	char cmd[64] = {'\0'};
 	list_for_each_safe(pos, next, &g_fileinfo->listhead->list)  
 	{  
 		filelist_node = list_entry(pos, FILELIST_S, list); //获取双链表结构体的地址
@@ -141,6 +208,7 @@ void show_filelist()
 
 		printf("file %s\n", filelist_node->filename);
 	}
+
 }
 
 int video_search_init()
@@ -159,9 +227,18 @@ int video_search_init()
 		printf("filelist_init failed\n");
 	}
 	INIT_LIST_HEAD(&g_fileinfo->listhead->list);
+
+	return 0;
 }
 
 int video_search_exit()
+{
+	filelist_clear_up();
+	return 0;
+
+}
+
+int filelist_clear_up()
 {
 	FILELIST_S *filelist_node = NULL;
 	LIST_HEAD_S *pos, *next;
@@ -173,7 +250,6 @@ int video_search_exit()
 		free(filelist_node);
 	}
 	return 0;
-
 }
 
 

@@ -45,7 +45,7 @@ Mp4Encoder::~Mp4Encoder()
 	closeMp4Encoder();
 }
 
-int32_t Mp4Encoder::writeAudioFrame(int8_t *audioFrame, int32_t frameSize, int32_t timeStamp)
+int32_t Mp4Encoder::writeAudioFrame(uint8_t *audioFrame, int32_t frameSize, int32_t timeStamp)
 {
 	if (audioFrame == nullptr || frameSize < 0 || m_Handler == nullptr || frameSize > MP2_AUDIO_TEMP_BUFFER_SIZE)
 	{
@@ -104,10 +104,11 @@ int32_t Mp4Encoder::writeAudioFrame(int8_t *audioFrame, int32_t frameSize, int32
 
 	return ret;
 }
-int32_t Mp4Encoder::writeVideoFrame(int8_t *videoFrame, int32_t frameSize, int32_t timeStamp)
+int32_t Mp4Encoder::writeVideoFrame(uint8_t *videoFrame, int32_t frameSize, int32_t timeStamp)
 {
 	if (videoFrame == nullptr || frameSize < 0 || m_Handler == nullptr || frameSize > MP4_VIDEO_FRAME_SIZE)
 	{
+		printf("error:%s,%d\n", __func__, __LINE__);
 		return -1;
 	}
 
@@ -149,6 +150,7 @@ int32_t Mp4Encoder::writeVideoFrame(int8_t *videoFrame, int32_t frameSize, int32
 		}
 		else
 		{
+			printf("error:%s,%d\n", __func__, __LINE__);
 			return -1;
 		}
 	}
@@ -166,6 +168,7 @@ int32_t Mp4Encoder::writeVideoFrame(int8_t *videoFrame, int32_t frameSize, int32
 		|| ((m_iLastTimeStemp > mMicroSeconds) && (mMicroSeconds + (0x200000000) / 90 - m_iLastTimeStemp)>3000))
 	{
 		m_iLastTimeStemp = mMicroSeconds;
+		printf("error:%s,%d\n", __func__, __LINE__);
 		return -1;
 	}
 
@@ -209,6 +212,7 @@ int32_t Mp4Encoder::writeVideoFrame(int8_t *videoFrame, int32_t frameSize, int32
 
 	if (m_iRcdTime < 0)
 	{
+		printf("error:%s,%d\n", __func__, __LINE__);
 		return -1;
 	}
 
@@ -223,7 +227,7 @@ int32_t Mp4Encoder::writeVideoFrame(int8_t *videoFrame, int32_t frameSize, int32
 			//mp4_write_close(m_Handler);
 			//m_Handler = NULL;
 		}
-		printf("write video success...\n");
+		//printf("write video success...\n");
 		m_llTotalSize += frameSize;
 	}
 	else
@@ -240,13 +244,14 @@ int32_t Mp4Encoder::openMp4Encoder()
 		return 0;
 	}
 
-	wchar_t TempPath[MP4_FILE_NAME_PATH_LENGTH];
+	//wchar_t TempPath[MP4_FILE_NAME_PATH_LENGTH];
 
 	//GetTempPathW(MP4_FILE_NAME_PATH_LENGTH, TempPath);
 
 	//GetTempFileNameW(TempPath, TEXT("TP_TMP"), 0, m_Mp2TmpFile);
 
-	swprintf(m_Mp2TmpFile, sizeof(L"tmp.mp2"), L"%s", L"tmp.mp2");
+	swprintf(m_Mp2TmpFile, MP4_FILE_NAME_PATH_LENGTH, L"%s", "/tmp/tmp.mp2");
+	//wcsncpy(m_Mp2TmpFile, L"/tmp/tmp.mp2", MP4_FILE_NAME_PATH_LENGTH);
 
 	if (m_iVStreamType == H264 || m_iVStreamType == H265)
 	{
