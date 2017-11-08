@@ -120,7 +120,7 @@ int snapshot_thread_create()
 		printf("pthread_create get buffer thread failed\n");
 		return ERROR;
 	}
-	pthread_setname_np(p_gs_snapshot_thd_param->pid, "recg\0");
+	pthread_setname_np(p_gs_snapshot_thd_param->pid, "snapshot\0");
 	gs_wd_thd_param.thd_stat = THD_STAT_RUNNING;
 
 	return OK;

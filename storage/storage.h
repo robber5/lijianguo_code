@@ -8,7 +8,6 @@ extern "C"
 #endif
 #endif
 
-#include "types.h"
 #define _LARGEFILE_SOURCE		1
 #define _LARGEFILE64_SOURCE		1
 #define _FILE_OFFSET_BITS		64

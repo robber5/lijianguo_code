@@ -187,21 +187,22 @@ start_record:
 
 		if (THD_STAT_STOP == p_gs_record_thd_param->thd_stat)//录像结束关闭MP4文件
 		{
-			if (TRUE == sd_card_mount)
+			if ((TRUE == sd_card_mount) && (OK == storage_umount_sdcard(MOUNT_DIR)))
 			{
-				storage_umount_sdcard(MOUNT_DIR);
 				sd_card_mount = FALSE;
 			}
-			break;
-		}
-		else if ((FALSE == sd_card_mount) && (OK == storage_mount_sdcard(MOUNT_DIR, DEV_NAME)))
-		{
-			sd_card_mount = TRUE;
-		}
-		else 
-		{
 			continue;
 		}
+		else if (FALSE == sd_card_mount)
+		{
+			if (ERROR == storage_mount_sdcard(MOUNT_DIR, DEV_NAME))
+			{
+				printf("record start failed\n");
+				continue;
+			}
+			sd_card_mount = TRUE;
+		}
+
 		sleep(p_gs_record_thd_param->delay_time);
 		videoEncoder.startRecvStream(CHN0);
 
@@ -354,6 +355,7 @@ int record_param_exit()
 
 int record_thread_destroy()
 {
+	record_enable_flag = FALSE;
 	record_thread_stop();
 	if (TRUE == sd_card_mount)
 	{
@@ -362,7 +364,6 @@ int record_thread_destroy()
 			sd_card_mount = FALSE;
 		}
 	}
-	record_enable_flag = FALSE;
 	sem_post(&p_gs_record_thd_param->wake_sem);
 	if (p_gs_record_thd_param->pid != PID_NULL)
 	{

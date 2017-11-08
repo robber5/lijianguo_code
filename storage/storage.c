@@ -22,6 +22,8 @@
 #include <fcntl.h>
 #include <linux/hdreg.h>
 #include "storage.h"
+#include "defs.h"
+#include "types.h"
 
 #define eMMC 0
 #define TSK_DEF_STACK_SIZE		16384
@@ -178,12 +180,12 @@ static int storage_sdcard_dev_init(char *devname)
 	{
 		printf("%s \n", devname);
 		perror("open");
-		return ERROR;
+		return S_ERROR;
 	}
 
 	lseek(s_devfd, 0, SEEK_SET);
 
-	return OK;
+	return S_OK;
 }
 
 static int storage_sdcard_dev_release(void)
@@ -200,11 +202,11 @@ static int storage_sdcard_dev_release(void)
 }
 
 /*
-STATUS storage_sdcard_read_part_table(char *devname)
+int storage_sdcard_read_part_table(char *devname)
 {
 	if (storage_sdcard_dev_init(devname) < 0)
 	{
-		return ERROR;
+		return S_ERROR;
 	}
 
 	ioctl(s_devfd, BLKRRPART, NULL);
@@ -212,7 +214,7 @@ STATUS storage_sdcard_read_part_table(char *devname)
 
 	storage_sdcard_dev_release();
 
-	return OK;
+	return S_OK;
 }
 
 */
@@ -223,7 +225,7 @@ static int storage_fat_get_capacity(void)
 	if (ioctl(s_devfd, BLKGETSIZE, &total_sect) < 0)
 	{
 		perror("BLKGETSIZE");
-		return ERROR;
+		return S_ERROR;
 	}
 	return total_sect;
 }
@@ -300,7 +302,7 @@ static int cal_free_clus(int fat_bits, int fat_rsv_sec, int sec_per_ftab)
 	if (ret < 0)
 	{
 		perror("lseek");
-		return ERROR;
+		return S_ERROR;
 	}
 
 	for (left = sec_per_ftab; left > 0; left -= FORMAT_SECTORS)
@@ -311,7 +313,7 @@ static int cal_free_clus(int fat_bits, int fat_rsv_sec, int sec_per_ftab)
 		if (ret < 0)
 		{
 			perror("read");
-			return ERROR;
+			return S_ERROR;
 		}
 		
 		for (i = 0; i < ret; i += fat_bits)
@@ -353,7 +355,7 @@ static int fat_get_free(void)
 	if (read(s_devfd, s_fatbuf, BUF_SIZE) < 0)
 	{
 		perror("read");
-		return ERROR;
+		return S_ERROR;
 	}
 
 	pbs = (msdos_boot_sector *)s_fatbuf;
@@ -490,7 +492,7 @@ static void fat_set_type(int total_sect)
  * 输    出: 	
  * 返 回 值: 	状态
  ******************************************************************************/
-static STATUS fboot_format(int total_sect) 
+static int fboot_format(int total_sect) 
 {
 	msdos_boot_sector *pbs;
 	Uint8_t	dummy_boot_jump[3] = {0xEB, 0x58, 0x90};/*fat32白皮书显示-- EB 58 90 */
@@ -564,7 +566,7 @@ static STATUS fboot_format(int total_sect)
 	if (ioctl(s_devfd, HDIO_GETGEO, &geometry) < 0)
 	{
 		perror("HDIO_GETGEO");
-		return ERROR;
+		return S_ERROR;
 	}
 
 	pbs->secs_track = geometry.sectors;
@@ -613,7 +615,7 @@ static STATUS fboot_format(int total_sect)
 	if (write(s_devfd, s_fatbuf, SECTOR_SIZE) < 0)
 	{
 		perror("write");
-		return ERROR;
+		return S_ERROR;
 	}
 
 	if (s_format.fat32_type)/*fat 32还必须在备份引导扇区再写一遍*/
@@ -622,11 +624,11 @@ static STATUS fboot_format(int total_sect)
 		if (write(s_devfd, s_fatbuf, SECTOR_SIZE) < 0)
 		{
 			perror("write");
-			return ERROR;
+			return S_ERROR;
 		}
 	}
 
-	return OK;
+	return S_OK;
 }
 
 /******************************************************************************
@@ -636,13 +638,13 @@ static STATUS fboot_format(int total_sect)
  * 输    出: 	赋值fat_boot_fsinfo
  * 返 回 值: 	状态
  ******************************************************************************/
-static STATUS fsinfo_format(void)
+static int fsinfo_format(void)
 {
 	fat_boot_fsinfo *pfinfo;
 
 	if (0 == s_format.fat32_type)
 	{
-		return OK;
+		return S_OK;
 	}
 
 	memset(s_fatbuf, 0, BUF_SIZE);
@@ -658,10 +660,10 @@ static STATUS fsinfo_format(void)
 	if (write(s_devfd, s_fatbuf, SECTOR_SIZE) < 0)
 	{
 		perror("write");
-		return ERROR;
+		return S_ERROR;
 	}
 
-	return OK;
+	return S_OK;
 }
 
 /******************************************************************************
@@ -672,7 +674,7 @@ static STATUS fsinfo_format(void)
  * 输    出: 	格式化后的fat表
  * 返 回 值: 	状态
  ******************************************************************************/
-static STATUS ftable_format(void)
+static int ftable_format(void)
 {
 	int once, left;
 	int buf_flag, ret;
@@ -716,14 +718,14 @@ static STATUS ftable_format(void)
 		if (ret < 0)
 		{
 			perror("lseek");
-			return ERROR;
+			return S_ERROR;
 		}
 
 		ret = write(s_devfd, s_fatbuf, once*SECTOR_SIZE);
 		if (ret < 0)
 		{
 			perror("write");
-			return ERROR;
+			return S_ERROR;
 		}
 
 		/* 用于备份的fat表也进行格式化 */
@@ -731,13 +733,13 @@ static STATUS ftable_format(void)
 		if (ret < 0)
 		{
 			perror("lseek");
-			return ERROR;
+			return S_ERROR;
 		}
 		ret = write(s_devfd, s_fatbuf, once*SECTOR_SIZE);
 		if (ret < 0)
 		{
 			perror("write");
-			return ERROR;
+			return S_ERROR;
 		}
 
 		if (0 == buf_flag)/* 第一次写入后,后续fat表的写入都是0*/
@@ -749,7 +751,7 @@ static STATUS ftable_format(void)
 		sect_off += once;
 	} 
 
-	return OK;
+	return S_OK;
 }
 
 /******************************************************************************
@@ -759,7 +761,7 @@ static STATUS ftable_format(void)
  * 输    出: 	格式化后的fat表
  * 返 回 值: 	状态
  ******************************************************************************/
-static STATUS froot_format(void)
+static int froot_format(void)
 {
 	msdos_dir_entry *pde;
 	int once, left;
@@ -788,7 +790,7 @@ static STATUS froot_format(void)
 	if (ret < 0)
 	{
 		perror("lseek");
-		return ERROR;
+		return S_ERROR;
 	}
 
 	buf_flag = 0;
@@ -801,7 +803,7 @@ static STATUS froot_format(void)
 		if (ret < 0)
 		{
 			perror("write");
-			return ERROR;
+			return S_ERROR;
 		}
 		if (0 == buf_flag)
 		{
@@ -810,7 +812,7 @@ static STATUS froot_format(void)
 		}
 	}
 
-	return OK;
+	return S_OK;
 }
 
 int storage_format_sdcard(char *devname)
@@ -895,7 +897,7 @@ int storage_mount_sdcard(char *mountpoint, char *devname)
 		return mount(devname, mountpoint, fstype, mountflg, 0);
 	}
 
-	return OK;
+	return S_OK;
 }
 
 
@@ -904,8 +906,13 @@ int storage_umount_sdcard(char *mountpoint)
 	printf("\numount sd card!!!!\n");
 	sync();
 	umount(mountpoint);
+	if (umount(mountpoint) == -1)
+	{
+		perror("umount");
+		fprintf(stderr, "try once.\n");
+		sleep(2);
+		return umount(mountpoint);
+	}
 
-	return 0;
+	return S_OK;
 }
-int main()
-{}
