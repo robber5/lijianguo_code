@@ -351,29 +351,29 @@ start_record:
 			videoEncoder.startRecvStream(chn[0]);
 			mp4Encoder[0].setVStreamType(p_gs_record_thd_param->entype);
 		}
-
+		timeout.tv_sec = 2; 	 
+		timeout.tv_usec = 500000;
+		FD_ZERO(&inputs);//用select函数之前先把集合清零
+		if (RECORD_MODE_SINGLE == p_gs_record_thd_param->record_mode)
+		{
+			FD_SET(fd[0],&inputs);//把要监测的句柄——fd,加入到集合里
+			fd_max = fd[0];
+		}
+		else
+		{
+			fd_max = get_max_fd(&fd[1], 4);
+			FD_SET(fd[1],&inputs);
+			FD_SET(fd[2],&inputs);
+			FD_SET(fd[3],&inputs);
+			FD_SET(fd[4],&inputs);
+		}
 		while (THD_STAT_START == p_gs_record_thd_param->thd_stat)
 		{
+			timeout.tv_sec = 2; 	 
+			timeout.tv_usec = 500000;
 			packetSize = PACKET_SIZE_MAX;
 			memset(packet, 0, packetSize);
-			//FD_ZERO(&testfds);
 			testfds = inputs;
-			timeout.tv_sec = 2;      
-			timeout.tv_usec = 500000; 
-			FD_ZERO(&inputs);//用select函数之前先把集合清零
-			if (RECORD_MODE_SINGLE == p_gs_record_thd_param->record_mode)
-			{
-				FD_SET(fd[0],&inputs);//把要监测的句柄——fd,加入到集合里
-				fd_max = fd[0];
-			}
-			else
-			{
-				fd_max = get_max_fd(&fd[1], 4);
-				FD_SET(fd[1],&inputs);
-				FD_SET(fd[2],&inputs);
-				FD_SET(fd[3],&inputs);
-				FD_SET(fd[4],&inputs);
-			}
 			pthread_mutex_lock(&p_gs_record_thd_param->record_cond.mutex);
 			if (FALSE == p_gs_record_thd_param->record_cond.wake)
 			{
