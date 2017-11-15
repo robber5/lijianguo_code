@@ -47,6 +47,8 @@ public:
 	int32_t openMp4Encoder();
 	int32_t closeMp4Encoder();
 	void setFileName(wchar_t *fileName);
+	void setVStreamType(int32_t vtype);
+	void setAStreamType(int32_t atype);
 
 private:
 	int8_t		m_AudioFrameBuffer[MP2_AUDIO_TEMP_BUFFER_SIZE];

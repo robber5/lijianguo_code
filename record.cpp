@@ -1,3 +1,13 @@
+/********************************************************************************* 
+  *Copyright(C),Zhejiang Detu Internet CO.Ltd 
+  *FileName:  record.c 
+  *Author:  Li Jianguo 
+  *Version:  1.0 
+  *Date:  2017.11.15 
+  *Description:  the record module
+
+**********************************************************************************/  
+
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
@@ -57,18 +67,18 @@ typedef enum
 
 typedef enum
 {
-	CODEC_H264 = 96,
-	CODEC_H265 = 265,
-
-} CODEC_TYPE_E;
-
-typedef enum
-{
 	NALU_TYPE_DEFAULT = 0,
-	NALU_TYPE_IDR = 5,
-	NALU_TYPE_SEI = 6,
-	NALU_TYPE_SPS = 7,
-	NALU_TYPE_PPS = 8,
+	NALU_TYPE_H264_IDR = 5,
+	NALU_TYPE_H264_SEI = 6,
+	NALU_TYPE_H264_SPS = 7,
+	NALU_TYPE_H264_PPS = 8,
+	NALU_TYPE_H265_IDR_W_RADL = 19,
+	NALU_TYPE_H265_IDR_N_LP   = 20,
+	NALU_TYPE_H265_VPS        = 32,
+	NALU_TYPE_H265_SPS        = 33,
+	NALU_TYPE_H265_PPS        = 34,
+	NALU_TYPE_H265_SEI_PREFIX = 39,
+	NALU_TYPE_H265_SEI_SUFFIX = 40,
 } NALU_TYPE_E;
 
 typedef struct record_cond_s
@@ -88,6 +98,7 @@ typedef struct record_thread_params
 	RECORD_COND_S		record_cond;//条件变量，录像控制
 	pthread_mutex_t     mutex;//命令锁，保证同时只执行一条命令
 	STREAM_TYPE_E       stream_t; //音视频
+	CODEC_TYPE_E		entype;//编码类型
 	RECORD_MODE_E		record_mode;//录像模式
 
 } RECORD_THREAD_PARAMS_S, *p_record_thread_params_s;
@@ -99,7 +110,7 @@ static p_record_thread_params_s p_gs_record_thd_param;
 
 #define RECORD_DIVIDE_TIME (20*60*1000*1000) //second
 #define PID_NULL			((pid_t)(-1))
-#define PACKET_SIZE_MAX (1024*1024)
+#define PACKET_SIZE_MAX (3*1024*1024)
 
 
 #define CHN_COUNT 5
@@ -127,29 +138,72 @@ static int combine_the_first_frame(Uint8_t *packet, int size, CODEC_TYPE_E encod
 	NALU_TYPE_E nalu_type;
 	int ret = UNCOMPLETE;
 	nalu_type = get_the_nalu_type(packet + 4, encode_type);
-	switch (nalu_type)
+	if (CODEC_H264 == encode_type)
 	{
-		case NALU_TYPE_IDR:
-			ret = COMPLETE;
-			printf("idr size:%d\n", size);
-			break;
-		case NALU_TYPE_SPS:
-			printf("SPS size:%d\n", size);
-			memset(g_packet[index], 0, PACKET_SIZE_MAX);
-			g_packet_size[index] = 0;
-			break;
-		case NALU_TYPE_PPS:
-			printf("PPS size:%d\n", size);
-			break;
-		case NALU_TYPE_SEI:
-			printf("SEI size:%d\n", size);
-			break;
-		default:
-			memset(g_packet[index], 0, PACKET_SIZE_MAX);
-			g_packet_size[index] = 0;
-			ret = COMPLETE;
-			printf("other size:%d, nalu_type:%d\n", size, nalu_type);
-			break;
+		switch (nalu_type)
+		{
+			case NALU_TYPE_H264_IDR:
+				ret = COMPLETE;
+				printf("idr size:%d\n", size);
+				break;
+			case NALU_TYPE_H264_SPS:
+				printf("SPS size:%d\n", size);
+				memset(g_packet[index], 0, PACKET_SIZE_MAX);
+				g_packet_size[index] = 0;
+				break;
+			case NALU_TYPE_H264_PPS:
+				printf("PPS size:%d\n", size);
+				break;
+			case NALU_TYPE_H264_SEI:
+				printf("SEI size:%d\n", size);
+				break;
+			default:
+				memset(g_packet[index], 0, PACKET_SIZE_MAX);
+				g_packet_size[index] = 0;
+				ret = COMPLETE;
+				printf("other size:%d, nalu_type:%d\n", size, nalu_type);
+				break;
+		}
+	}
+	else
+	{
+		switch (nalu_type)
+		{
+			case NALU_TYPE_H265_IDR_W_RADL:
+				ret = COMPLETE;
+				printf("idr size:%d\n", size);
+				break;
+			case NALU_TYPE_H265_IDR_N_LP:
+				ret = COMPLETE;
+				printf("idr size:%d\n", size);
+				break;
+
+			case NALU_TYPE_H265_VPS:
+				printf("VPS size:%d\n", size);
+				memset(g_packet[index], 0, PACKET_SIZE_MAX);
+				g_packet_size[index] = 0;
+				break;
+			case NALU_TYPE_H265_SPS:
+				printf("SPS size:%d\n", size);
+				break;
+			case NALU_TYPE_H265_PPS:
+				printf("PPS size:%d\n", size);
+				break;
+			case NALU_TYPE_H265_SEI_PREFIX:
+				printf("SEI size:%d\n", size);
+				break;
+			case NALU_TYPE_H265_SEI_SUFFIX:
+				printf("SEI size:%d\n", size);
+				break;
+			default:
+				memset(g_packet[index], 0, PACKET_SIZE_MAX);
+				g_packet_size[index] = 0;
+				ret = COMPLETE;
+				printf("other size:%d, nalu_type:%d\n", size, nalu_type);
+				break;
+		}
+
+
 	}
 	if (PACKET_SIZE_MAX >= (g_packet_size[index] + size))
 	{
@@ -177,13 +231,24 @@ static void record_get_mp4_filename(wchar_t *filename, int index)
 }
 
 
-void init_record_chn(int *chn)
+void record_set_chn(int *chn, CODEC_TYPE_E encode_type)
 {
-	chn[0] = 4;
-	chn[1] = 4;
-	chn[2] = 5;
-	chn[3] = 6;
-	chn[4] = 7;
+	if (CODEC_H264 == encode_type)
+	{
+		chn[0] = 4;
+		chn[1] = 4;
+		chn[2] = 5;
+		chn[3] = 6;
+		chn[4] = 7;
+	}
+	else
+	{
+		chn[0] = 0;
+		chn[1] = 0;
+		chn[2] = 1;
+		chn[3] = 2;
+		chn[4] = 3;
+	}
 }
 
 
@@ -207,7 +272,7 @@ void *record_thread(void *p)
 	int fd_max = -1;
 	int i = 0;
 	Mp4Encoder *mp4Encoder = new Mp4Encoder[CHN_COUNT];
-	int chn[CHN_COUNT];
+	int chn[CHN_COUNT] = {0};
 	Uint8_t *packet = NULL;
 	Uint32_t packetSize = PACKET_SIZE_MAX;
 	Uint64_t pts = 0;
@@ -220,7 +285,6 @@ void *record_thread(void *p)
 	wmemset(filename, 0, FILE_NAME_LEN_MAX);
 	VideoEncodeMgr& videoEncoder = *VideoEncodeMgr::instance();
 
-	init_record_chn(chn);
 	packet = (Uint8_t *)malloc(PACKET_SIZE_MAX);
 	memset(packet, 0, PACKET_SIZE_MAX);
 #if 1
@@ -233,6 +297,8 @@ start_record:
 			pthread_cond_wait(&p_gs_record_thd_param->record_cond.cond, &p_gs_record_thd_param->record_cond.mutex);
 		}
 		pthread_mutex_unlock(&p_gs_record_thd_param->record_cond.mutex);
+
+		record_set_chn(chn, p_gs_record_thd_param->entype);
 
 		if (RECORD_MODE_SINGLE == p_gs_record_thd_param->record_mode)
 		{
@@ -277,11 +343,13 @@ start_record:
 			for (i = 1; i < CHN_COUNT; i++)
 			{
 				videoEncoder.startRecvStream(chn[i]);
+				mp4Encoder[i].setVStreamType(p_gs_record_thd_param->entype);
 			}
 		}
 		else
 		{
 			videoEncoder.startRecvStream(chn[0]);
+			mp4Encoder[0].setVStreamType(p_gs_record_thd_param->entype);
 		}
 
 		while (THD_STAT_START == p_gs_record_thd_param->thd_stat)
@@ -341,7 +409,7 @@ start_record:
 					}
 				
 					videoEncoder.getStream(chn[i], packet, packetSize, pts);
-					if (UNCOMPLETE == combine_the_first_frame(packet, packetSize, CODEC_H264, i))//组合第一帧数据
+					if (UNCOMPLETE == combine_the_first_frame(packet, packetSize, p_gs_record_thd_param->entype, i))//组合第一帧数据
 					{
 						break;
 					}
@@ -440,7 +508,7 @@ int record_thread_create()
 		return ERROR;
 	}
 	pthread_setname_np(p_gs_record_thd_param->pid, "recg\0");
-	p_gs_record_thd_param->thd_stat = THD_STAT_START;
+	p_gs_record_thd_param->thd_stat = THD_STAT_IDLE;
 
 	return OK;
 
@@ -516,6 +584,7 @@ int record_param_init()
 	p_gs_record_thd_param->pid = PID_NULL;
 	p_gs_record_thd_param->thd_stat = THD_STAT_IDLE;
 	p_gs_record_thd_param->stream_t = STREAM_TYPE_NONE;
+	p_gs_record_thd_param->entype = CODEC_H264;
 	p_gs_record_thd_param->record_mode = RECORD_MODE_MULTI;
 	pthread_mutex_init(&p_gs_record_thd_param->mutex, NULL);
 	record_cond_init(&p_gs_record_thd_param->record_cond);
@@ -679,4 +748,56 @@ void record_thread_restart()
 	pthread_mutex_unlock(&p_gs_record_thd_param->record_cond.mutex);
 
 	pthread_mutex_unlock(&p_gs_record_thd_param->mutex);
+}
+
+
+/*
+编码类型设置
+*/
+int record_set_encode_type(CODEC_TYPE_E entype)
+{
+	if ((CODEC_H264 != entype) && (CODEC_H265 != entype))
+	{
+		return ERROR;
+	}
+	pthread_mutex_lock(&p_gs_record_thd_param->mutex);
+
+	if (entype != p_gs_record_thd_param->entype)
+	{
+		pthread_mutex_lock(&p_gs_record_thd_param->record_cond.mutex);
+		if (THD_STAT_START == p_gs_record_thd_param->thd_stat)
+		{
+			p_gs_record_thd_param->thd_stat = THD_STAT_STOP;
+			do
+			{
+				pthread_cond_wait(&p_gs_record_thd_param->record_cond.cond, &p_gs_record_thd_param->record_cond.mutex);//确保在录像停止之前不接受其他命令
+			}while(TRUE == p_gs_record_thd_param->record_cond.wake); //等待wake置为false时退出
+		}
+		p_gs_record_thd_param->entype = entype;
+	
+		if (THD_STAT_START != p_gs_record_thd_param->thd_stat)
+		{
+			
+			p_gs_record_thd_param->thd_stat = THD_STAT_START;
+			pthread_cond_signal(&p_gs_record_thd_param->record_cond.cond);
+			do
+			{
+				pthread_cond_wait(&p_gs_record_thd_param->record_cond.cond, &p_gs_record_thd_param->record_cond.mutex);//确保在录像正常运行之前不接受其他命令
+				if (FALSE == p_gs_record_thd_param->record_cond.wake_success)
+				{
+					p_gs_record_thd_param->record_cond.wake_success = TRUE;//置为初始值
+					break;//启动失败退出
+				}
+			}while(FALSE == p_gs_record_thd_param->record_cond.wake);
+		}
+		pthread_mutex_unlock(&p_gs_record_thd_param->record_cond.mutex);
+	}
+	else
+	{
+		printf("already the entype :%d\n", entype);
+	}
+	
+	pthread_mutex_unlock(&p_gs_record_thd_param->mutex);
+
+	return OK;
 }

@@ -329,3 +329,28 @@ void Mp4Encoder::setFileName(wchar_t *fileName)
 
 	return;
 }
+
+
+void Mp4Encoder::setVStreamType(int32_t vtype)
+{	
+	if (96 == vtype || 265 == vtype)
+	{
+		m_iVStreamType = (96 == vtype) ? H264 : H265;
+	}
+	else
+	{
+		printf("illegal encode type\n");
+	}
+
+	return;
+}
+
+void Mp4Encoder::setAStreamType(int32_t atype)
+{
+
+	m_iAStreamType = atype;
+
+	return;
+}
+
+
