@@ -26,6 +26,6 @@ AC_TYPE_UINT8_T
 AC_FUNC_MALLOC
 AC_CHECK_FUNCS([memset select])
 
-AC_CONFIG_FILES(Makefile mp4muxer-custom/Makefile mp4muxer-custom/mp4lib/Makefile storage/Makefile)
-AC_CONFIG_SUBDIRS([mp4muxer-custom] [storage])
+AC_CONFIG_FILES(Makefile mp4muxer-ffmpeg/Makefile  storage/Makefile)
+AC_CONFIG_SUBDIRS([mp4muxer-ffmpeg] [storage])
 AC_OUTPUT

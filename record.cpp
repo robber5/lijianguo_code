@@ -23,12 +23,14 @@
 
 #include <wchar.h>
 #include <stdlib.h>
-#include "Mp4Encoder.h"
+#include "mp4_encoder.h"
 #include "record.h"
 #include "storage.h"
 
 
 using namespace detu_media;
+using namespace detu_record;
+
 #define CHN0 0
 #define CHN1 1
 #define CHN2 2
@@ -49,19 +51,14 @@ using namespace detu_media;
 
 #define RECORD_DIVIDE_TIME (20*60*1000*1000) //second
 #define PID_NULL			((pid_t)(-1))
-#define PACKET_SIZE_MAX (2*1024*1024)
+
+#define PACKET_SIZE_MAX (10*1024*1024)
 
 #define CHN_COUNT 5
 
-#define FRAME_COUNT_MAX 150
+#define GOP_COUNT_MAX 30
 
-typedef enum
-{
-	STREAM_TYPE_NONE,
-	STREAM_TYPE_AUDIO,
-	STREAM_TYPE_VIDEO,
-	STREAM_TYPE_MAX,
-} STREAM_TYPE_E;
+#define FRAME_COUNT_MAX 35
 
 
 typedef enum
@@ -107,7 +104,7 @@ typedef struct record_thread_params
 	volatile THD_STAT_E thd_stat;
 	RECORD_COND_S		record_cond;//条件变量，录像控制
 	pthread_mutex_t     mutex;//命令锁，保证同时只执行一条命令
-	STREAM_TYPE_E       stream_t; //音视频
+	MediaType       stream_t; //音视频
 	CODEC_TYPE_E		entype;//编码类型
 	RECORD_MODE_E		record_mode;//录像模式
 
@@ -119,8 +116,11 @@ typedef struct framelist_s
 	int chn;
 	int last; //是否是最后一帧数据
 	int first; //是否是第一帧数据
-	Uint64_t pts;
-	Uint32_t packetSize;
+
+	Uint32_t pts[FRAME_COUNT_MAX];
+	Uint32_t packetSize[FRAME_COUNT_MAX];
+	Uint32_t gopsize;
+	Uint32_t frame_count;
 	CODEC_TYPE_E		entype;//编码类型
 	LIST_HEAD_S list;
 
@@ -130,13 +130,12 @@ typedef struct listinfo_s
 {
 	pthread_cond_t cond;
 	pthread_mutex_t mutex;
-	Uint32_t frame_count;
+	Uint32_t gop_count;
 	FRAMELIST_S *listhead;
 } LISTINFO_S;
 
 static char s_video_dir[CHN_COUNT][16] = {AVS_VIDEO_DIR, CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR};
 static FRAMELIST_S *s_framelist_node[CHN_COUNT];
-static Uint64_t internal_time[CHN_COUNT];
 static int s_record_enable_flag = TRUE;
 static int s_sd_card_mount = FALSE;
 static p_record_thread_params_s s_p_record_thd_param;
@@ -157,7 +156,7 @@ static NALU_TYPE_E get_the_nalu_type(Uint8_t *packet, CODEC_TYPE_E encode_type)
 	return NALU_TYPE_DEFAULT;
 }
 
-static int Is_the_first_frame_completed(Uint8_t *packet, int size, CODEC_TYPE_E encode_type, int index)
+static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 {
 	NALU_TYPE_E nalu_type;
 	int ret = UNCOMPLETE;
@@ -227,14 +226,32 @@ static int Is_the_first_frame_completed(Uint8_t *packet, int size, CODEC_TYPE_E 
 	return ret;
 }
 
+static int Is_the_Iframe(Uint8_t *packet, CODEC_TYPE_E encode_type)
+{
+	int ret = FALSE;
+	NALU_TYPE_E nalu_type;
 
-static void record_get_mp4_filename(wchar_t *filename, int index)
+	nalu_type = get_the_nalu_type(packet + 4, encode_type);
+	if ((CODEC_H264 == encode_type) && (NALU_TYPE_H264_IDR == nalu_type))
+	{
+		ret = TRUE;
+	}
+	else if ((CODEC_H265 == encode_type) && ((NALU_TYPE_H265_IDR_W_RADL == nalu_type) || (NALU_TYPE_H265_IDR_N_LP == nalu_type)))
+	{
+		ret = TRUE;
+	}
+
+	return ret;
+}
+
+
+static void record_get_mp4_filename(char *filename, int index)
 {
 	time_t time_seconds = time(NULL);  
 	struct tm local_time;  
 	localtime_r(&time_seconds, &local_time);  
 
-	swprintf(filename, FILE_NAME_LEN_MAX, L"%s%s/%d%02d%02d%02d%02d%02d.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,  
+	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,  
 		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
 
 	return;
@@ -285,26 +302,29 @@ static FRAMELIST_S *record_alloc_framelist_node(void)
 		return NULL;
 	}
 	memset(framelist_node, 0, sizeof(FRAMELIST_S));
-	framelist_node->packetSize = 0;
+	//framelist_node->packetSize = 0;
 
 	return framelist_node;
 }
 
-static int32_t record_add_frame(int32_t chn, FRAMELIST_S *framelist_node)
+static int32_t record_add_gop(FRAMELIST_S *goplist_node)
 {
-	if ((NULL != s_framelist_info) && (NULL != s_framelist_head) && (NULL != framelist_node))
+	if ((NULL != s_framelist_info) && (NULL != s_framelist_head) && (NULL != goplist_node))
 	{
 		pthread_mutex_lock(&s_framelist_info->mutex);
-		if (FRAME_COUNT_MAX > s_framelist_info->frame_count)
+		if (GOP_COUNT_MAX > s_framelist_info->gop_count)
 		{
-			list_add_tail(&framelist_node->list, &s_framelist_head->list);
-			s_framelist_info->frame_count++;
-			pthread_cond_signal(&s_framelist_info->cond);
+			list_add_tail(&goplist_node->list, &s_framelist_head->list);
+			s_framelist_info->gop_count++;
+			if (1 == s_framelist_info->gop_count)
+			{
+				pthread_cond_signal(&s_framelist_info->cond);
+			}
 		}
 		else
 		{
-			printf("drop frame,too many frame in list\n");
-			free(framelist_node);
+			printf("chn[%d]#####################drop frame,too many frame in list#############################\n", goplist_node->chn);
+			free(goplist_node);
 		}
 		pthread_mutex_unlock(&s_framelist_info->mutex);
 	}
@@ -315,30 +335,6 @@ static int32_t record_add_frame(int32_t chn, FRAMELIST_S *framelist_node)
 
 	return OK;
 }
-//cpu 占用过高
-static void record_sleep(Uint64_t pts, Uint64_t last_pts)
-{
-	static Uint32_t index = 0;
-	int i = 0;
-	Uint64_t average_time = 0;
-	Uint64_t totol_time = 0;
-	if ((pts > last_pts) && (0 != last_pts))
-	{
-		internal_time[index] = pts - last_pts;
-	}
-	else
-	{
-		internal_time[index] = 0;
-	}
-	index = (index + 1) % CHN_COUNT;
-	for (i = 0; i < CHN_COUNT; i++)
-	{
-		totol_time += internal_time[i];
-	}
-	average_time = totol_time / CHN_COUNT;
-	usleep(average_time);
-
-}
 
 static void *record_get_frame_thread(void *p)
 {
@@ -346,6 +342,7 @@ static void *record_get_frame_thread(void *p)
 	int fd_max = -1;
 	int i = 0, j = 0, chn_num = 0;
 	int chn[CHN_COUNT] = {0};
+	int frame_count = 0;
 	Uint8_t *packet = NULL;
 	Uint32_t packetSize = PACKET_SIZE_MAX;
 	Uint64_t pts = 0;
@@ -357,10 +354,9 @@ static void *record_get_frame_thread(void *p)
 	int fd[CHN_COUNT];
 	VideoEncodeMgr& videoEncoder = *VideoEncodeMgr::instance();
 	int fd_found[CHN_COUNT];
+	int index;
 	memset(fd_found, -1, CHN_COUNT * sizeof(int));
 
-	packet = (Uint8_t *)malloc(PACKET_SIZE_MAX);
-	memset(packet, 0, PACKET_SIZE_MAX);
 	FRAMELIST_S *framelist_node = NULL;
 #if 1
 	while (s_record_enable_flag)
@@ -472,111 +468,92 @@ start_record:
 						printf("not found available fd");
 						break;
 					}
-					//last_pts = pts;
 					for (i = 0; i < j; i++)
 					{
-						packetSize = PACKET_SIZE_MAX;
-						//memset(packet, 0, packetSize);
-						if (NULL == s_framelist_node[fd_found[i]])
+						index = fd_found[i];
+						if (NULL == s_framelist_node[index])
 						{
-							s_framelist_node[fd_found[i]] = record_alloc_framelist_node();
-							if (NULL == s_framelist_node[fd_found[i]])
+							s_framelist_node[index] = record_alloc_framelist_node();
+							if (NULL == s_framelist_node[index])
 							{
 								perror("record_alloc_framelist_node:");
 								printf("record_alloc_framelist_node failed,try another once\n");
-								s_framelist_node[fd_found[i]] = record_alloc_framelist_node();
-								if (NULL == s_framelist_node[fd_found[i]])
+								s_framelist_node[index] = record_alloc_framelist_node();
+								if (NULL == s_framelist_node[index])
 								{
 									goto err;
 								}
 							}
-							s_framelist_node[fd_found[i]]->chn = fd_found[i];
-							s_framelist_node[fd_found[i]]->entype = s_p_record_thd_param->entype;
+							s_framelist_node[index]->chn = index;
+							s_framelist_node[index]->entype = s_p_record_thd_param->entype;
 						}
-						framelist_node = s_framelist_node[fd_found[i]];
-						packet = framelist_node->frame + framelist_node->packetSize;
-						if (-1 == videoEncoder.getStream(chn[fd_found[i]], packet, packetSize, pts))
+						framelist_node = s_framelist_node[index];
+						packet = framelist_node->frame + framelist_node->gopsize;
+						packetSize = PACKET_SIZE_MAX - framelist_node->gopsize;
+						if (-1 == videoEncoder.getStream(chn[index], packet, packetSize, pts))
 						{
+							record_add_gop(framelist_node);
+							s_framelist_node[index] = NULL;
 							break;
 						}
-						framelist_node->packetSize += packetSize;
-						if (UNCOMPLETE == Is_the_first_frame_completed(packet, packetSize, framelist_node->entype, fd_found[i]))//组合第一帧数据
+						//printf("chn:%d, packet size:%d\n", fd_found[i], packetSize);
+						framelist_node->gopsize += packetSize;
+						if (UNCOMPLETE == Is_the_frame_completed(packet, framelist_node->entype))//组合第一帧数据
 						{
 							break;
-						}
-						if (0 == start_time[fd_found[i]])
-						{
-							start_time[fd_found[i]] = pts;
-							framelist_node->first = TRUE;//文件的第一帧，新建MP4文件
 						}
 
-						if (s_p_record_thd_param->divide_time <= (pts -start_time[fd_found[i]]))//分时功能
+						if (Is_the_Iframe(packet, framelist_node->entype) || ((FRAME_COUNT_MAX - 1) <= framelist_node->frame_count))
 						{
-							framelist_node->last = TRUE;//最后一帧，关闭MP4文件
-							start_time[fd_found[i]] = 0;
+							if (0 == start_time[index])
+							{
+								start_time[index] = pts;
+								framelist_node->first = TRUE;//文件的第一组gop，新建MP4文件
+							}
+							if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
+							{
+								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
+								start_time[index] = 0;
+							}
+							record_add_gop(framelist_node);
+							s_framelist_node[index] = NULL;//处理完数据指针置为NULL
 						}
-						else
-						{
-							framelist_node->last = FALSE;
-						}
-						framelist_node->entype = s_p_record_thd_param->entype;
-						framelist_node->pts = pts;
-						record_add_frame(fd_found[i], framelist_node);
-						s_framelist_node[fd_found[i]] = NULL;//处理完数据指针置为NULL
+
+						frame_count = framelist_node->frame_count++;
+						framelist_node->pts[frame_count] = pts/1000;
+						framelist_node->packetSize[frame_count] = packetSize;
 					}
 					break;
 				}
-				//record_sleep(pts, last_pts);
+err:
+
 				if (THD_STAT_STOP == s_p_record_thd_param->thd_stat)//录像结束关闭MP4文件
 				{
 					if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
 					{
-						videoEncoder.stopRecvStream(chn[0]);
-						framelist_node = record_alloc_framelist_node();
-						if (NULL == framelist_node)
+						if (NULL != s_framelist_node[0])
 						{
-							perror("record_alloc_framelist_node:");
-							printf("record_alloc_framelist_node failed,try another once\n");
-							framelist_node = record_alloc_framelist_node();
-							if (NULL == framelist_node)
-							{
-								goto err;
-							}
+							videoEncoder.stopRecvStream(chn[0]);
+							s_framelist_node[0]->last = TRUE;
+							s_framelist_node[0]->first = FALSE;
+							record_add_gop(s_framelist_node[0]);
+							s_framelist_node[0] = NULL;
+							start_time[0] = 0;
 						}
-						framelist_node->entype = s_p_record_thd_param->entype;
-						framelist_node->chn = 0;
-						framelist_node->packetSize = 0;
-						framelist_node->pts = 0;
-						framelist_node->last = TRUE;
-						framelist_node->first = FALSE;
-						record_add_frame(0, framelist_node);	
-						start_time[0] = 0;
 					}
 					else
 					{
 						for (i = 1; i < CHN_COUNT; i++)
 						{
-							videoEncoder.stopRecvStream(chn[i]);
-							start_time[i] = 0;
-							framelist_node = record_alloc_framelist_node();
-							if (NULL == framelist_node)
+							if (NULL != s_framelist_node[i])
 							{
-								perror("record_alloc_framelist_node:");
-								printf("record_alloc_framelist_node failed,try another once\n");
-								framelist_node = record_alloc_framelist_node();
-								if (NULL == framelist_node)
-								{
-									goto err;
-								}
+								videoEncoder.stopRecvStream(chn[i]);
+								s_framelist_node[i]->last = TRUE;
+								s_framelist_node[i]->first = FALSE;
+								record_add_gop(s_framelist_node[i]);
+								s_framelist_node[i] = NULL;
+								start_time[i] = 0;
 							}
-							framelist_node->entype = s_p_record_thd_param->entype;
-							framelist_node->chn = i;
-							framelist_node->packetSize = 0;
-							framelist_node->pts = 0;
-							framelist_node->last = TRUE;
-							framelist_node->first = FALSE;
-							record_add_frame(i, framelist_node);
-
 						}
 					}
 					pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
@@ -594,20 +571,8 @@ start_record:
 
 	}
 #endif
-err:
-	if (THD_STAT_STOP == s_p_record_thd_param->thd_stat)
-	{
-		pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
-		if (TRUE == s_p_record_thd_param->record_cond.wake)
-		{
-			s_p_record_thd_param->record_cond.wake = FALSE;
-			pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);//通知录像已关闭
-		}
-		pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
-	}
-	s_p_record_thd_param->thd_stat = THD_STAT_QUIT;
 
-	return OK;
+	return (void *)OK;
 
 }
 
@@ -616,76 +581,81 @@ static void *record_write_mp4_thread(void *p)
 	int ret = OK;
 	int chn = -1;
 	int state = 0;
-	Mp4Encoder *mp4Encoder = new Mp4Encoder[CHN_COUNT];
-	wchar_t filename[FILE_NAME_LEN_MAX];
-	wmemset(filename, 0, FILE_NAME_LEN_MAX);
+	int i = 0;
+	int offset = 0;
+
+	Mp4Encoder *mp4_encoder = new Mp4Encoder[CHN_COUNT];
+	char filename[FILE_NAME_LEN_MAX];
+	memset(filename, 0, FILE_NAME_LEN_MAX);
 	FRAMELIST_S *framelist_node = NULL;
+
+	VideoParamter video_param = {AV_CODEC_ID_H264, 3840, 2160};
+	AudioParamter audio_param = {AV_CODEC_ID_AAC};
 
 	while (s_record_enable_flag)
 	{
-		pthread_mutex_lock(&s_framelist_info->mutex);
-		do
-		{	
-			pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
-			if((FALSE == s_record_enable_flag)
-				|| ((THD_STAT_QUIT == s_p_record_thd_param->thd_stat) && (0 == s_framelist_info->frame_count)))
+		if (0 == s_framelist_info->gop_count)
+		{
+			pthread_mutex_lock(&s_framelist_info->mutex);
+			if (0 == s_framelist_info->gop_count)
 			{
-				pthread_mutex_unlock(&s_framelist_info->mutex);
-				goto exit;//退出线程
+				do
+				{	
+					pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
+					if((FALSE == s_record_enable_flag)
+						|| ((THD_STAT_STOP == s_p_record_thd_param->thd_stat) && (0 == s_framelist_info->gop_count)))
+					{
+						pthread_mutex_unlock(&s_framelist_info->mutex);
+						goto exit;//退出线程
+					}
+						
+				}while(0 == s_framelist_info->gop_count);
 			}
-				
-		}while(0 == s_framelist_info->frame_count);
-		pthread_mutex_unlock(&s_framelist_info->mutex);
+			pthread_mutex_unlock(&s_framelist_info->mutex);
+		}
 
 		framelist_node = list_entry(s_framelist_head->list.next, FRAMELIST_S, list);
 		chn = framelist_node->chn;
 		if (TRUE == framelist_node->first)
 		{
-			mp4Encoder[chn].setVStreamType(framelist_node->entype);
 			record_get_mp4_filename(filename, chn);
-			mp4Encoder[chn].setFileName(filename);
-			mp4Encoder[chn].openMp4Encoder();
+			if (!mp4_encoder[chn].Init(filename, video_param, audio_param))
+			{
+				DBG_INFO("Mp4 init failed\n");
+				return (void *)-1;
+			}
 		}
-		if (0 == framelist_node->packetSize)
+		for (i = 0, offset = 0; i < framelist_node->frame_count; i++)
 		{
-			mp4Encoder[chn].closeMp4Encoder();//THD_STAT_STOP,关闭录像文件
+			if (0 != (mp4_encoder[chn].WriteOneFrame(MEDIA_TYPE_VIDEO,(char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
+			{
+				DBG_INFO("Write video frame failed\n");
+			}
+			offset += framelist_node->packetSize[i];
 		}
-		else if (ERROR == mp4Encoder[chn].writeVideoFrame(framelist_node->frame, framelist_node->packetSize, (Uint32_t)(framelist_node->pts/1000)))
+		if (TRUE == framelist_node->last)
 		{
-			printf("write video failed!\n");
-		}
-		if ((TRUE == framelist_node->last) && (0 == framelist_node->packetSize))
-		{
-			mp4Encoder[chn].closeMp4Encoder();
+			mp4_encoder[chn].Close();
 		}
 		pthread_mutex_lock(&s_framelist_info->mutex);
 		list_del_init(&framelist_node->list);
-		s_framelist_info->frame_count--;
-		pthread_mutex_unlock(&s_framelist_info->mutex);
+		s_framelist_info->gop_count--;
 		free(framelist_node);
+		pthread_mutex_unlock(&s_framelist_info->mutex);
 
 	}
 
 exit:
 	for (chn = 0; chn < CHN_COUNT; chn++)
 	{
-		mp4Encoder[chn].getFileState(state);
+		mp4_encoder[chn].GetFileState(state);
 		if (1 == state)//open 状态需关闭
 		{
-			mp4Encoder[chn].closeMp4Encoder();
+			mp4_encoder[chn].Close();
 		}
 	}
-	delete []mp4Encoder;
-	return OK;
-}
-
-static void record_internal_init(void)
-{
-	int  i = 0;
-	for (; i < CHN_COUNT; i++)
-	{
-		internal_time[i] = 10 * 1000;
-	}
+	delete []mp4_encoder;
+	return (void *)OK;
 }
 
 static int record_framelist_init(void)
@@ -697,7 +667,7 @@ static int record_framelist_init(void)
 		printf("filelist_init failed\n");
 		return ERROR;
 	}
-	s_framelist_info->frame_count = 0;
+	s_framelist_info->gop_count = 0;
 	s_framelist_info->mutex = PTHREAD_MUTEX_INITIALIZER;
 	s_framelist_info->cond = PTHREAD_COND_INITIALIZER;
 	s_framelist_info->listhead = (FRAMELIST_S *)malloc(sizeof(FRAMELIST_S));
@@ -716,24 +686,39 @@ static int record_framelist_init(void)
 
 static int record_thread_create(void)
 {
+	pthread_attr_t attr1,attr2;
+	struct sched_param param;
+
 	if (OK != record_framelist_init())
 	{
 		printf("pthread_create get frame thread failed\n");
 		return ERROR;
 	}
 
-	record_internal_init();
+	pthread_attr_init(&attr1);
+	pthread_attr_init(&attr2);
 
-	if (0 != pthread_create(&s_p_record_thd_param->gpid, NULL, record_get_frame_thread, NULL))
+	param.sched_priority = 99;
+	pthread_attr_setschedpolicy(&attr2,SCHED_RR);
+	pthread_attr_setschedparam(&attr2,&param);
+	pthread_attr_setinheritsched(&attr2,PTHREAD_EXPLICIT_SCHED);//要使优先级其作用必须要有这句话
+
+	param.sched_priority = 1;
+	pthread_attr_setschedpolicy(&attr1,SCHED_RR);
+	pthread_attr_setschedparam(&attr1,&param);
+	pthread_attr_setinheritsched(&attr1,PTHREAD_EXPLICIT_SCHED);
+
+
+	if (0 != pthread_create(&s_p_record_thd_param->gpid, &attr1, record_get_frame_thread, NULL))
 	{
-		perror("pthread_create failed:");
+		perror("pthread_create failed");
 		printf("pthread_create get frame thread failed\n");
 		return ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->gpid, "recg\0");
-	if (0 != pthread_create(&s_p_record_thd_param->wpid, NULL, record_write_mp4_thread, NULL))
+	if (0 != pthread_create(&s_p_record_thd_param->wpid, &attr2, record_write_mp4_thread, NULL))
 	{
-		perror("pthread_create failed:");
+		perror("pthread_create failed");
 		printf("pthread_create get frame thread failed\n");
 		return ERROR;
 	}
@@ -814,9 +799,9 @@ static int record_param_init(void)
 	s_p_record_thd_param->gpid = PID_NULL;
 	s_p_record_thd_param->wpid = PID_NULL;
 	s_p_record_thd_param->thd_stat = THD_STAT_IDLE;
-	s_p_record_thd_param->stream_t = STREAM_TYPE_NONE;
+	s_p_record_thd_param->stream_t = MEDIA_TYPE_VIDEO;
 	s_p_record_thd_param->entype = CODEC_H264;
-	s_p_record_thd_param->record_mode = RECORD_MODE_SINGLE;
+	s_p_record_thd_param->record_mode = RECORD_MODE_MULTI;
 	pthread_mutex_init(&s_p_record_thd_param->mutex, NULL);
 	record_cond_init(&s_p_record_thd_param->record_cond);
 
@@ -847,7 +832,7 @@ static int record_framelist_destroy(void)
 		{  
 			framelist_node = list_entry(pos, FRAMELIST_S, list); //获取双链表结构体的地址
 			list_del_init(pos);
-			s_framelist_info->frame_count--;
+			s_framelist_info->gop_count--;
 			free(framelist_node);
 		}
 		free(s_framelist_head);
