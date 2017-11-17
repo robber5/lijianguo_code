@@ -144,24 +144,24 @@ static int combine_the_first_frame(Uint8_t *packet, int size, CODEC_TYPE_E encod
 		{
 			case NALU_TYPE_H264_IDR:
 				ret = COMPLETE;
-				printf("idr size:%d\n", size);
+				//printf("idr size:%d\n", size);
 				break;
 			case NALU_TYPE_H264_SPS:
-				printf("SPS size:%d\n", size);
+				//printf("SPS size:%d\n", size);
 				memset(g_packet[index], 0, PACKET_SIZE_MAX);
 				g_packet_size[index] = 0;
 				break;
 			case NALU_TYPE_H264_PPS:
-				printf("PPS size:%d\n", size);
+				//printf("PPS size:%d\n", size);
 				break;
 			case NALU_TYPE_H264_SEI:
-				printf("SEI size:%d\n", size);
+				//printf("SEI size:%d\n", size);
 				break;
 			default:
 				memset(g_packet[index], 0, PACKET_SIZE_MAX);
 				g_packet_size[index] = 0;
 				ret = COMPLETE;
-				printf("other size:%d, nalu_type:%d\n", size, nalu_type);
+				//printf("other size:%d, nalu_type:%d\n", size, nalu_type);
 				break;
 		}
 	}
@@ -171,35 +171,35 @@ static int combine_the_first_frame(Uint8_t *packet, int size, CODEC_TYPE_E encod
 		{
 			case NALU_TYPE_H265_IDR_W_RADL:
 				ret = COMPLETE;
-				printf("idr size:%d\n", size);
+				//printf("idr size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_IDR_N_LP:
 				ret = COMPLETE;
-				printf("idr size:%d\n", size);
+				//printf("idr size:%d\n", size);
 				break;
 
 			case NALU_TYPE_H265_VPS:
-				printf("VPS size:%d\n", size);
+				//printf("VPS size:%d\n", size);
 				memset(g_packet[index], 0, PACKET_SIZE_MAX);
 				g_packet_size[index] = 0;
 				break;
 			case NALU_TYPE_H265_SPS:
-				printf("SPS size:%d\n", size);
+				//printf("SPS size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_PPS:
-				printf("PPS size:%d\n", size);
+				//printf("PPS size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_SEI_PREFIX:
-				printf("SEI size:%d\n", size);
+				//printf("SEI size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_SEI_SUFFIX:
-				printf("SEI size:%d\n", size);
+				//printf("SEI size:%d\n", size);
 				break;
 			default:
 				memset(g_packet[index], 0, PACKET_SIZE_MAX);
 				g_packet_size[index] = 0;
 				ret = COMPLETE;
-				printf("other size:%d, nalu_type:%d\n", size, nalu_type);
+				//printf("other size:%d, nalu_type:%d\n", size, nalu_type);
 				break;
 		}
 
@@ -235,7 +235,7 @@ void record_set_chn(int *chn, CODEC_TYPE_E encode_type)
 {
 	if (CODEC_H264 == encode_type)
 	{
-		chn[0] = 4;
+		chn[0] = 12;
 		chn[1] = 4;
 		chn[2] = 5;
 		chn[3] = 6;
@@ -270,7 +270,7 @@ void *record_thread(void *p)
 {
 	int ret = 0;
 	int fd_max = -1;
-	int i = 0;
+	int i = 0, j = 0;
 	Mp4Encoder *mp4Encoder = new Mp4Encoder[CHN_COUNT];
 	int chn[CHN_COUNT] = {0};
 	Uint8_t *packet = NULL;
@@ -284,6 +284,8 @@ void *record_thread(void *p)
 	wchar_t filename[FILE_NAME_LEN_MAX];
 	wmemset(filename, 0, FILE_NAME_LEN_MAX);
 	VideoEncodeMgr& videoEncoder = *VideoEncodeMgr::instance();
+	int fd_found[CHN_COUNT];
+	memset(fd_found, -1, CHN_COUNT * sizeof(int));
 
 	packet = (Uint8_t *)malloc(PACKET_SIZE_MAX);
 	memset(packet, 0, PACKET_SIZE_MAX);
@@ -361,26 +363,24 @@ start_record:
 		}
 		else
 		{
-			fd_max = get_max_fd(&fd[1], 4);
-			FD_SET(fd[1],&inputs);
-			FD_SET(fd[2],&inputs);
-			FD_SET(fd[3],&inputs);
-			FD_SET(fd[4],&inputs);
+			fd_max = get_max_fd(&fd[1], CHN_COUNT - 1);
+			for (i = 1; i < CHN_COUNT; i++)
+			{
+				FD_SET(fd[i],&inputs);
+			}
 		}
+		pthread_mutex_lock(&p_gs_record_thd_param->record_cond.mutex);
+		if (FALSE == p_gs_record_thd_param->record_cond.wake)
+		{
+			p_gs_record_thd_param->record_cond.wake = TRUE;
+			pthread_cond_signal(&p_gs_record_thd_param->record_cond.cond);//通知录像已处于正常运行
+		}
+		pthread_mutex_unlock(&p_gs_record_thd_param->record_cond.mutex);
 		while (THD_STAT_START == p_gs_record_thd_param->thd_stat)
 		{
 			timeout.tv_sec = 2; 	 
 			timeout.tv_usec = 500000;
-			packetSize = PACKET_SIZE_MAX;
-			memset(packet, 0, packetSize);
 			testfds = inputs;
-			pthread_mutex_lock(&p_gs_record_thd_param->record_cond.mutex);
-			if (FALSE == p_gs_record_thd_param->record_cond.wake)
-			{
-				p_gs_record_thd_param->record_cond.wake = TRUE;
-				pthread_cond_signal(&p_gs_record_thd_param->record_cond.cond);//通知录像已处于正常运行
-			}
-			pthread_mutex_unlock(&p_gs_record_thd_param->record_cond.mutex);
 			result = select(fd_max+1, &testfds, NULL, NULL, &timeout);	
 			switch (result)
 			{   
@@ -395,59 +395,64 @@ start_record:
 		2.延时录像，录像开始时间延后delay_time
 		3.录像文件大小，单个不超过2G
 	*/
-					for (i = 0; i < CHN_COUNT; i++)
+					for (i = 0, j = 0; i < CHN_COUNT; i++)
 					{
 						if (FD_ISSET(fd[i],&testfds))
 						{
-							break;
+							fd_found[j] = i;
+							j++;
 						}
 					}
-					if (CHN_COUNT <= i)
+					if (0 == j)
 					{
 						printf("not found available fd");
 						break;
 					}
-				
-					videoEncoder.getStream(chn[i], packet, packetSize, pts);
-					if (UNCOMPLETE == combine_the_first_frame(packet, packetSize, p_gs_record_thd_param->entype, i))//组合第一帧数据
+					for (i = 0; i < j; i++)
 					{
-						break;
-					}
-					if (0 == start_time[i])
-					{
-						start_time[i] = pts;
-						record_get_mp4_filename(filename, i);
-						mp4Encoder[i].setFileName(filename);
-						mp4Encoder[i].openMp4Encoder();
-						if (ERROR == mp4Encoder[i].writeVideoFrame(g_packet[i], g_packet_size[i], (Uint32_t)(pts/1000)))
+						packetSize = PACKET_SIZE_MAX;
+						memset(packet, 0, packetSize);
+						videoEncoder.getStream(chn[fd_found[i]], packet, packetSize, pts);
+						if (UNCOMPLETE == combine_the_first_frame(packet, packetSize, p_gs_record_thd_param->entype, fd_found[i]))//组合第一帧数据
 						{
-							printf("write video failed!\n");
+							break;
 						}
-					}
-					else if (p_gs_record_thd_param->divide_time <= (pts -start_time[i]))//分时功能
-					{
-						videoEncoder.stopRecvStream(chn[i]);
-						mp4Encoder[i].closeMp4Encoder();
-						printf("create new file\n");
-						videoEncoder.startRecvStream(chn[i]);
-						start_time[i] = pts;
-						record_get_mp4_filename(filename, i);
-						mp4Encoder[i].setFileName(filename);
-						mp4Encoder[i].openMp4Encoder();
-						if (ERROR == mp4Encoder[i].writeVideoFrame(g_packet[i], g_packet_size[i], (Uint32_t)(pts/1000)))
+						if (0 == start_time[fd_found[i]])
 						{
-							printf("write video failed!\n");
+							start_time[fd_found[i]] = pts;
+							record_get_mp4_filename(filename, fd_found[i]);
+							mp4Encoder[fd_found[i]].setFileName(filename);
+							mp4Encoder[fd_found[i]].openMp4Encoder();
+							if (ERROR == mp4Encoder[fd_found[i]].writeVideoFrame(g_packet[fd_found[i]], g_packet_size[fd_found[i]], (Uint32_t)(pts/1000)))
+							{
+								printf("write video failed!\n");
+							}
 						}
-					}
-					else
-					{
-						if (ERROR == mp4Encoder[i].writeVideoFrame(g_packet[i], g_packet_size[i], (Uint32_t)(pts/1000)))
+						else if (p_gs_record_thd_param->divide_time <= (pts -start_time[fd_found[i]]))//分时功能
 						{
-							printf("write video failed!\n");
+							videoEncoder.stopRecvStream(chn[fd_found[i]]);
+							mp4Encoder[fd_found[i]].closeMp4Encoder();
+							printf("create new file\n");
+							videoEncoder.startRecvStream(chn[fd_found[i]]);
+							start_time[fd_found[i]] = pts;
+							record_get_mp4_filename(filename, fd_found[i]);
+							mp4Encoder[fd_found[i]].setFileName(filename);
+							mp4Encoder[fd_found[i]].openMp4Encoder();
+							if (ERROR == mp4Encoder[fd_found[i]].writeVideoFrame(g_packet[fd_found[i]], g_packet_size[fd_found[i]], (Uint32_t)(pts/1000)))
+							{
+								printf("write video failed!\n");
+							}
 						}
+						else
+						{
+							if (ERROR == mp4Encoder[fd_found[i]].writeVideoFrame(g_packet[fd_found[i]], g_packet_size[fd_found[i]], (Uint32_t)(pts/1000)))
+							{
+								printf("write video failed!\n");
+							}
 
+						}
+						memset(g_packet[fd_found[i]], 0, PACKET_SIZE_MAX);
 					}
-					memset(g_packet[i], 0, PACKET_SIZE_MAX);
 					break;
 				}
 				if (THD_STAT_STOP == p_gs_record_thd_param->thd_stat)//录像结束关闭MP4文件
