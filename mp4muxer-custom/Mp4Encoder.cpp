@@ -15,7 +15,8 @@ extern "C" {
 #endif
 
 Mp4Encoder::Mp4Encoder()
-	: m_iAudioBufferSize(0)
+	: m_state(0)
+	, m_iAudioBufferSize(0)
 	, m_iVStreamType(H264)
 	, m_iAStreamType(AAC)
 	, m_iHeight(2160)
@@ -28,6 +29,7 @@ Mp4Encoder::Mp4Encoder()
 {
 	m_Handler = nullptr;
 	m_pMP2DecHandler = nullptr;
+	m_VideoFrameBuffer = nullptr;
 	m_iCarryBitCount = 0;
 	m_iLastTimeStemp = 0;
 	m_iRcdTime = 0;
@@ -36,7 +38,6 @@ Mp4Encoder::Mp4Encoder()
 
 	memset(m_AudioFrameBuffer, 0, sizeof(m_AudioFrameBuffer));
 	memset(m_FileName, 0, sizeof(wchar_t) * MP4_FILE_NAME_PATH_LENGTH);
-	memset(m_VideoFrameBuffer, 0, sizeof(m_VideoFrameBuffer));
 }
 
 
@@ -117,8 +118,9 @@ int32_t Mp4Encoder::writeVideoFrame(uint8_t *videoFrame, int32_t frameSize, int3
 	int32_t nalHeaderSize = 0;
 
 
-	memset(m_VideoFrameBuffer, 0, sizeof(m_VideoFrameBuffer));
-	memcpy(m_VideoFrameBuffer, videoFrame, frameSize);
+	//memset(m_VideoFrameBuffer, 0, sizeof(m_VideoFrameBuffer));
+	//memcpy(m_VideoFrameBuffer, videoFrame, frameSize);
+	m_VideoFrameBuffer = (int8_t *)videoFrame;
 
 	mMicroSeconds = timeStamp;
 
@@ -284,7 +286,7 @@ int32_t Mp4Encoder::openMp4Encoder()
 	{
 		/*do nothing */
 	}
-
+	m_state = 1;//MP4文件创建
 	return 1;
 }
 int32_t Mp4Encoder::closeMp4Encoder()
@@ -317,6 +319,7 @@ int32_t Mp4Encoder::closeMp4Encoder()
 	else
 	{
 	}
+	m_state = 0;//MP4文件已关闭
 	return 0;
 }
 void Mp4Encoder::setFileName(wchar_t *fileName)
@@ -353,4 +356,8 @@ void Mp4Encoder::setAStreamType(int32_t atype)
 	return;
 }
 
+void Mp4Encoder::getFileState(int32_t &state)
+{
+	state = m_state;
+}
 

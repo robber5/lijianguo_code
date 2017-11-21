@@ -7,8 +7,8 @@
 #include "record_search.h"
 
 
-static DIR *g_video_dir;
-static FILEINFO_S *g_fileinfo;
+static DIR *s_video_dir;
+static FILEINFO_S *s_fileinfo;
 
 
 /*
@@ -25,29 +25,29 @@ int refresh_video_filelist()
 	int filename_num_max = 0;
 
 	filelist_clear_up();
-	if (NULL == g_video_dir)
+	if (NULL == s_video_dir)
 	{
-		if ((g_video_dir = opendir(VIDEO_DIR)) == NULL)
+		if ((s_video_dir = opendir(VIDEO_DIR)) == NULL)
 		{
 			perror("opendir video_dir");
 			printf("get_video_filelist failed\n");
 			return -1;
 		}
 	}
-	rewinddir(g_video_dir);
+	rewinddir(s_video_dir);
 	int i = 0;
-	while ((file = readdir(g_video_dir)) != NULL)
+	while ((file = readdir(s_video_dir)) != NULL)
 	{
 		if ('.' != file->d_name[0]) //排除'.','..'和其他隐藏文件
 		{
 			//printf("file%d：%s",i, file->d_name);
 			//i++;
 			inset_video_by_name(file->d_name);
-			g_fileinfo->file_num++;
+			s_fileinfo->file_num++;
 		}
 	}
 
-	if (closedir(g_video_dir))
+	if (closedir(s_video_dir))
 	{
 		perror("opendir video_dir");
 		return -1;
@@ -76,15 +76,15 @@ int inset_video_by_name(char *filename)
 	FILELIST_S *filelist_node = NULL, *filelist_node_tmp = NULL, *filelist_node_next = NULL;
 	int filename_num = 0, filename_num_tmp = 0, filename_num_next = 0;
 
-	if (0 == g_fileinfo->file_num)
+	if (0 == s_fileinfo->file_num)
 	{
 		ret = 1;
-		pos = &g_fileinfo->listhead->list;
+		pos = &s_fileinfo->listhead->list;
 	}
 	else
 	{
 		filename_num = get_filename_prefix_number(filename);
-		list_for_each_safe(pos, nextpos, &g_fileinfo->listhead->list)
+		list_for_each_safe(pos, nextpos, &s_fileinfo->listhead->list)
 		{
 			filelist_node_tmp = list_entry(pos, FILELIST_S, list);
 			filename_num_tmp = get_filename_prefix_number(filelist_node_tmp->filename);
@@ -96,7 +96,7 @@ int inset_video_by_name(char *filename)
 			}
 			else
 			{
-				if ((&g_fileinfo->listhead->list) != nextpos)
+				if ((&s_fileinfo->listhead->list) != nextpos)
 				{
 					filelist_node_next = list_entry(nextpos, FILELIST_S, list);
 					filename_num_next = get_filename_prefix_number(filelist_node_next->filename);
@@ -148,7 +148,7 @@ void search_video_by_name(char *filename)
 	LIST_HEAD_S *pos;
 	FILELIST_S *filelist_node = NULL;
 
-	list_for_each(pos, &g_fileinfo->listhead->list)   
+	list_for_each(pos, &s_fileinfo->listhead->list)   
 	{   
 	    filelist_node = list_entry(pos, FILELIST_S, list);
 	    if (0 == strcmp(filelist_node->filename, filename))
@@ -175,7 +175,7 @@ void delete_file_by_name(char **filename, int count)
 	LIST_HEAD_S *pos, *next;
 	int i = 0, remain = count;
 	char cmd[64] = {'\0'};
-	list_for_each_safe(pos, next, &g_fileinfo->listhead->list)  
+	list_for_each_safe(pos, next, &s_fileinfo->listhead->list)  
 	{  
 		filelist_node = list_entry(pos, FILELIST_S, list); //获取双链表结构体的地址
 		for (i = 0; i < count; i++)
@@ -185,7 +185,7 @@ void delete_file_by_name(char **filename, int count)
 				sprintf(cmd, "rm %s/%s", VIDEO_DIR, filename[i]);
 				system(cmd);
 				list_del_init(pos);
-				g_fileinfo->file_num--;
+				s_fileinfo->file_num--;
 				remain--;
 				free(filelist_node);
 			}
@@ -202,7 +202,7 @@ void show_filelist()
 	LIST_HEAD_S *pos;
 	FILELIST_S *filelist_node = NULL;
 
-	list_for_each(pos, &g_fileinfo->listhead->list)   
+	list_for_each(pos, &s_fileinfo->listhead->list)   
 	{   
 	    filelist_node = list_entry(pos, FILELIST_S, list);
 
@@ -213,20 +213,20 @@ void show_filelist()
 
 int video_search_init()
 {
-	g_fileinfo = (FILEINFO_S *)malloc(sizeof(FILEINFO_S));
-	if (NULL == g_fileinfo)
+	s_fileinfo = (FILEINFO_S *)malloc(sizeof(FILEINFO_S));
+	if (NULL == s_fileinfo)
 	{
-		perror("g_fileinfo malloc failed:");
+		perror("s_fileinfo malloc failed:");
 		printf("filelist_init failed\n");
 	}
-	g_fileinfo->file_num = 0;
-	g_fileinfo->listhead = (FILELIST_S *)malloc(sizeof(FILELIST_S));
-	if (NULL == g_fileinfo->listhead)
+	s_fileinfo->file_num = 0;
+	s_fileinfo->listhead = (FILELIST_S *)malloc(sizeof(FILELIST_S));
+	if (NULL == s_fileinfo->listhead)
 	{
-		perror("g_fileinfo->head malloc failed:");
+		perror("s_fileinfo->head malloc failed:");
 		printf("filelist_init failed\n");
 	}
-	INIT_LIST_HEAD(&g_fileinfo->listhead->list);
+	INIT_LIST_HEAD(&s_fileinfo->listhead->list);
 
 	return 0;
 }
@@ -242,11 +242,11 @@ int filelist_clear_up()
 {
 	FILELIST_S *filelist_node = NULL;
 	LIST_HEAD_S *pos, *next;
-	list_for_each_safe(pos, next, &g_fileinfo->listhead->list)  
+	list_for_each_safe(pos, next, &s_fileinfo->listhead->list)  
 	{  
 		filelist_node = list_entry(pos, FILELIST_S, list); //获取双链表结构体的地址
 		list_del_init(pos);
-		g_fileinfo->file_num--;
+		s_fileinfo->file_num--;
 		free(filelist_node);
 	}
 	return 0;

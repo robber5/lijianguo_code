@@ -29,15 +29,15 @@ typedef enum
 } CODEC_TYPE_E;
 
 
-void record_thread_start();
-void record_thread_stop();
+void record_thread_start(void);
+void record_thread_stop(void);
 int record_set_delay_time(int time);
-void record_thread_restart();
+void record_thread_restart(void);
 int record_set_record_mode(RECORD_MODE_E mode);
 int record_set_encode_type(CODEC_TYPE_E entype);
 
-int record_module_init();
-int record_module_exit();
+int record_module_init(void);
+int record_module_exit(void);
 
 #endif
 

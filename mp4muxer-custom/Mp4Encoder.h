@@ -27,7 +27,7 @@ enum AudioStreamType
 	AAC
 };
 
-#define G_MAX_FRAME_SIZE                4000000
+#define G_MAX_FRAME_SIZE                2000000
 #define MP2_AUDIO_FRAME_SIZE			2014
 #define MP2_AUDIO_TEMP_BUFFER_SIZE		2800
 #define MP4_FILE_NAME_PATH_LENGTH		256
@@ -49,6 +49,7 @@ public:
 	void setFileName(wchar_t *fileName);
 	void setVStreamType(int32_t vtype);
 	void setAStreamType(int32_t atype);
+	void getFileState(int32_t &state);
 
 private:
 	int8_t		m_AudioFrameBuffer[MP2_AUDIO_TEMP_BUFFER_SIZE];
@@ -57,7 +58,7 @@ private:
 	wchar_t		m_Mp2TmpFile[MP4_FILE_NAME_PATH_LENGTH];
 	int8_t		*m_Handler;
 	HMP2DEC		m_pMP2DecHandler;
-	int8_t      m_VideoFrameBuffer[MP4_VIDEO_FRAME_SIZE];
+	int8_t      *m_VideoFrameBuffer;
 
 	/*video params*/
 	int32_t		m_iWidth;
@@ -76,5 +77,8 @@ private:
 	uint16_t	m_wBitPerSample;
 	int32_t		m_iAStreamType;
 	int32_t     m_iALastTimeStamp;
+
+	/*file states*/
+	int32_t		m_state;
 };
 
