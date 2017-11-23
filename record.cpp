@@ -56,7 +56,7 @@ using namespace detu_record;
 
 #define CHN_COUNT 5
 
-#define GOP_COUNT_MAX 30
+#define GOP_COUNT_MAX 28
 
 #define FRAME_COUNT_MAX 35
 
@@ -323,7 +323,7 @@ static int32_t record_add_gop(FRAMELIST_S *goplist_node)
 		}
 		else
 		{
-			printf("chn[%d]#####################drop frame,too many frame in list#############################\n", goplist_node->chn);
+			printf("chn[%d]drop frame,too many frame in list\n", goplist_node->chn);
 			free(goplist_node);
 		}
 		pthread_mutex_unlock(&s_framelist_info->mutex);
@@ -685,15 +685,15 @@ static int record_framelist_init(void)
 
 static int record_thread_create(void)
 {
-	pthread_attr_t attr1,attr2;
-	struct sched_param param;
+//	pthread_attr_t attr1,attr2;
+//	struct sched_param param;
 
 	if (OK != record_framelist_init())
 	{
 		printf("pthread_create get frame thread failed\n");
 		return ERROR;
 	}
-
+/*
 	pthread_attr_init(&attr1);
 	pthread_attr_init(&attr2);
 
@@ -707,15 +707,15 @@ static int record_thread_create(void)
 	pthread_attr_setschedparam(&attr1,&param);
 	pthread_attr_setinheritsched(&attr1,PTHREAD_EXPLICIT_SCHED);
 
-
-	if (0 != pthread_create(&s_p_record_thd_param->gpid, &attr1, record_get_frame_thread, NULL))
+*/
+	if (0 != pthread_create(&s_p_record_thd_param->gpid, NULL, record_get_frame_thread, NULL))
 	{
 		perror("pthread_create failed");
 		printf("pthread_create get frame thread failed\n");
 		return ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->gpid, "recg\0");
-	if (0 != pthread_create(&s_p_record_thd_param->wpid, &attr2, record_write_mp4_thread, NULL))
+	if (0 != pthread_create(&s_p_record_thd_param->wpid, NULL, record_write_mp4_thread, NULL))
 	{
 		perror("pthread_create failed");
 		printf("pthread_create get frame thread failed\n");
