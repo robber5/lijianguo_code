@@ -502,7 +502,9 @@ start_record:
 						{
 							break;
 						}
-
+						frame_count = framelist_node->frame_count++;
+						framelist_node->pts[frame_count] = pts/1000;
+						framelist_node->packetSize[frame_count] = packetSize;
 						if (Is_the_Iframe(packet, framelist_node->entype) || ((FRAME_COUNT_MAX - 1) <= framelist_node->frame_count))
 						{
 							if (0 == start_time[index])
@@ -519,9 +521,6 @@ start_record:
 							s_framelist_node[index] = NULL;//处理完数据指针置为NULL
 						}
 
-						frame_count = framelist_node->frame_count++;
-						framelist_node->pts[frame_count] = pts/1000;
-						framelist_node->packetSize[frame_count] = packetSize;
 					}
 					break;
 				}
