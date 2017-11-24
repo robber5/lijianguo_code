@@ -24,7 +24,7 @@ namespace  detu_record
 
 	Mp4Encoder::~Mp4Encoder()
 	{
-		Release();
+		//Release();
 	}
 
 	bool Mp4Encoder::Init(std::string file_name, const VideoParamter &video_param,

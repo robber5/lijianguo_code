@@ -489,15 +489,19 @@ start_record:
 							break;
 						}
 						frame_count = framelist_node->frame_count++;
-						framelist_node->pts[frame_count] = pts/1000;
+						if (0 == start_time[index])
+						{
+							start_time[index] = pts;
+							framelist_node->first = TRUE;//文件的第一组gop，新建MP4文件
+							framelist_node->pts[frame_count] = 0;
+						}
+						else
+						{
+							framelist_node->pts[frame_count] = (pts - start_time[index])/1000;
+						}
 						framelist_node->packetSize[frame_count] = packetSize;
 						if (Is_the_Iframe(packet, framelist_node->entype) || ((FRAME_COUNT_MAX - 1) <= framelist_node->frame_count))
 						{
-							if (0 == start_time[index])
-							{
-								start_time[index] = pts;
-								framelist_node->first = TRUE;//文件的第一组gop，新建MP4文件
-							}
 							if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
 							{
 								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
@@ -622,6 +626,8 @@ static void *record_write_mp4_thread(void *p)
 		if (TRUE == framelist_node->last)
 		{
 			mp4_encoder[chn].Close();
+			mp4_encoder[chn].Release();
+			printf("chn[%d]close file\n", chn);
 		}
 		pthread_mutex_lock(&s_framelist_info->mutex);
 		list_del_init(&framelist_node->list);
@@ -638,6 +644,7 @@ exit:
 		if (1 == state)//open 状态需关闭
 		{
 			mp4_encoder[chn].Close();
+			mp4_encoder[chn].Release();
 		}
 	}
 	delete []mp4_encoder;
