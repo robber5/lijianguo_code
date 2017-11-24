@@ -56,11 +56,11 @@ namespace detu_record
 		void GetFileState(int &state);
 		void Close();
 		void Release();
+		int WriteVideoFrame(char *frame, int length, int pts);
+		int WriteAudioFrame(char *frame, int length, int pts);
 
 	private:
 		bool InitEncoder();
-		int WriteVideoFrame(char *frame, int length, int pts);
-		int WriteAudioFrame(char *frame, int length, int pts);
 
 	private:
 		std::string file_name_;
@@ -71,6 +71,7 @@ namespace detu_record
 		AVFormatContext *ofmt_ctx_;
 		AVOutputFormat *ofmt_;
 		int state;
+		AVPacket pkt;
 	};
 
 }

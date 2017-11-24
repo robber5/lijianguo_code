@@ -11,7 +11,7 @@
 
 #include "record_search.h"
 
-#define RECORD
+//#define RECORD
 
 typedef enum
 {

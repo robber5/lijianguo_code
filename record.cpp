@@ -20,8 +20,6 @@
 
 #include "video_encoder.h"
 
-
-#include <wchar.h>
 #include <stdlib.h>
 #include "mp4_encoder.h"
 #include "record.h"
@@ -56,7 +54,7 @@ using namespace detu_record;
 
 #define CHN_COUNT 5
 
-#define GOP_COUNT_MAX 28
+#define GOP_COUNT_MAX 12
 
 #define FRAME_COUNT_MAX 35
 
@@ -167,20 +165,16 @@ static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 		{
 			case NALU_TYPE_H264_IDR:
 				ret = COMPLETE;
-				//printf("idr size:%d\n", size);
 				break;
 			case NALU_TYPE_H264_SPS:
-				//printf("SPS size:%d\n", size);
 				break;
 			case NALU_TYPE_H264_PPS:
-				//printf("PPS size:%d\n", size);
 				break;
 			case NALU_TYPE_H264_SEI:
-				//printf("SEI size:%d\n", size);
 				break;
+
 			default:
 				ret = COMPLETE;
-				//printf("other size:%d, nalu_type:%d\n", size, nalu_type);
 				break;
 		}
 	}
@@ -190,33 +184,23 @@ static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 		{
 			case NALU_TYPE_H265_IDR_W_RADL:
 				ret = COMPLETE;
-				//printf("idr size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_IDR_N_LP:
 				ret = COMPLETE;
-				//printf("idr size:%d\n", size);
 				break;
-
 			case NALU_TYPE_H265_VPS:
-				//printf("VPS size:%d\n", size);
-				//memset(s_packet[index], 0, PACKET_SIZE_MAX);
 				break;
 			case NALU_TYPE_H265_SPS:
-				//printf("SPS size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_PPS:
-				//printf("PPS size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_SEI_PREFIX:
-				//printf("SEI size:%d\n", size);
 				break;
 			case NALU_TYPE_H265_SEI_SUFFIX:
-				//printf("SEI size:%d\n", size);
 				break;
+
 			default:
-				//memset(s_packet[index], 0, PACKET_SIZE_MAX);
 				ret = COMPLETE;
-				//printf("other size:%d, nalu_type:%d\n", size, nalu_type);
 				break;
 		}
 
@@ -363,11 +347,16 @@ static void *record_get_frame_thread(void *p)
 	{
 start_record:
 		pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
-		while (THD_STAT_START != s_p_record_thd_param->thd_stat)
+		while ((THD_STAT_START != s_p_record_thd_param->thd_stat) && (THD_STAT_QUIT != s_p_record_thd_param->thd_stat))
 		{
 			pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);
 		}
 		pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
+
+		if (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)
+		{
+			break;//record destroy
+		}
 
 		record_set_chn(chn, s_p_record_thd_param->entype);
 
@@ -397,20 +386,17 @@ start_record:
 		{
 			if (ERROR == storage_mount_sdcard(MOUNT_DIR, DEV_NAME))
 			{
-				printf("record start failed\n");
 				pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
 				s_p_record_thd_param->record_cond.wake_success = FALSE;
-				pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);//通知录像启动失败
+				pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//通知录像启动失败
 				s_p_record_thd_param->thd_stat = THD_STAT_STOP;
-				pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+				pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
 				continue;
 			}
 			s_sd_card_mount = TRUE;
 		}
 
 		sleep(s_p_record_thd_param->delay_time);
-		timeout.tv_sec = 2; 	 
-		timeout.tv_usec = 500000;
 		FD_ZERO(&inputs);//用select函数之前先把集合清零
 		if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
 		{
@@ -433,7 +419,7 @@ start_record:
 		if (FALSE == s_p_record_thd_param->record_cond.wake)
 		{
 			s_p_record_thd_param->record_cond.wake = TRUE;
-			pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);//通知录像已处于正常运行
+			pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//通知录像已处于正常运行
 		}
 		pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
 		while (THD_STAT_START == s_p_record_thd_param->thd_stat)
@@ -526,7 +512,7 @@ start_record:
 				}
 err:
 
-				if (THD_STAT_STOP == s_p_record_thd_param->thd_stat)//录像结束关闭MP4文件
+				if (THD_STAT_START != s_p_record_thd_param->thd_stat)//录像结束关闭MP4文件
 				{
 					if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
 					{
@@ -559,7 +545,7 @@ err:
 					if (TRUE == s_p_record_thd_param->record_cond.wake)
 					{
 						s_p_record_thd_param->record_cond.wake = FALSE;
-						pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);//通知录像已关闭
+						pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//通知录像已关闭
 					}
 					pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
 
@@ -601,8 +587,8 @@ static void *record_write_mp4_thread(void *p)
 				do
 				{	
 					pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
-					if((FALSE == s_record_enable_flag)
-						|| ((THD_STAT_STOP == s_p_record_thd_param->thd_stat) && (0 == s_framelist_info->gop_count)))
+					if(((FALSE == s_record_enable_flag)
+						|| (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)) && (0 == s_framelist_info->gop_count))
 					{
 						pthread_mutex_unlock(&s_framelist_info->mutex);
 						goto exit;//退出线程
@@ -618,15 +604,16 @@ static void *record_write_mp4_thread(void *p)
 		if (TRUE == framelist_node->first)
 		{
 			record_get_mp4_filename(filename, chn);
+			video_param.codec_id_ = (CODEC_H264 == framelist_node->entype) ? AV_CODEC_ID_H264 :  AV_CODEC_ID_H265;
 			if (!mp4_encoder[chn].Init(filename, video_param, audio_param))
 			{
 				DBG_INFO("Mp4 init failed\n");
-				return (void *)-1;
+				goto exit;
 			}
 		}
 		for (i = 0, offset = 0; i < framelist_node->frame_count; i++)
 		{
-			if (0 != (mp4_encoder[chn].WriteOneFrame(MEDIA_TYPE_VIDEO,(char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
+			if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
 			{
 				DBG_INFO("Write video frame failed\n");
 			}
@@ -754,7 +741,7 @@ void record_thread_start(void)
 	if (THD_STAT_START != s_p_record_thd_param->thd_stat)
 	{
 		s_p_record_thd_param->thd_stat = THD_STAT_START;
-		pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);
+		pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);
 		do
 		{
 			pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像正常运行之前不接受其他命令
@@ -852,8 +839,14 @@ static int record_framelist_destroy(void)
 int record_thread_destroy(void)
 {
 	s_record_enable_flag = FALSE;
-	record_thread_start();
-	s_p_record_thd_param->thd_stat = THD_STAT_STOP;
+	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+	s_p_record_thd_param->thd_stat = THD_STAT_QUIT;
+	if (THD_STAT_START != s_p_record_thd_param->thd_stat)
+	{
+		pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);
+	}
+	pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
+	pthread_cond_signal(&s_framelist_info->cond);//退出写线程
 	if (s_p_record_thd_param->gpid != PID_NULL)
 	{
 		pthread_join(s_p_record_thd_param->gpid, 0);
@@ -942,7 +935,7 @@ int record_set_record_mode(RECORD_MODE_E mode)
 		{
 			
 			s_p_record_thd_param->thd_stat = THD_STAT_START;
-			pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);
+			pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);
 			do
 			{
 				pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像正常运行之前不接受其他命令
@@ -985,7 +978,7 @@ void record_thread_restart(void)
 	if (THD_STAT_START != s_p_record_thd_param->thd_stat)
 	{
 		s_p_record_thd_param->thd_stat = THD_STAT_START;
-		pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);
+		pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);
 		do
 		{
 			pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像正常运行之前不接受其他命令
@@ -1030,7 +1023,7 @@ int record_set_encode_type(CODEC_TYPE_E entype)
 		{
 			
 			s_p_record_thd_param->thd_stat = THD_STAT_START;
-			pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);
+			pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);
 			do
 			{
 				pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像正常运行之前不接受其他命令

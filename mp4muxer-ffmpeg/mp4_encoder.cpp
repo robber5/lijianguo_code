@@ -34,6 +34,7 @@ namespace  detu_record
 		video_param_ = video_param;
 		audio_param_ = audio_param;
 		state = 1;
+		pkt = { 0 };
 		return InitEncoder();
 	}
 
@@ -43,6 +44,7 @@ namespace  detu_record
 		//...
 		av_write_trailer(ofmt_ctx_);
 		state = 0;
+		av_packet_unref(&pkt);
 	}
 
 	bool Mp4Encoder::InitEncoder()
@@ -102,7 +104,7 @@ namespace  detu_record
 			DBG_INFO("write avi file header failed\n");
 			return false;
 		}
-
+		av_init_packet(&pkt);
 		return true;
 	}
 
@@ -156,9 +158,6 @@ namespace  detu_record
 			DBG_INFO("invalid input paramter\n");
 			return -1;
 		}
-
-		AVPacket pkt = { 0 };
-		av_init_packet(&pkt);
 
 		int nalHeaderSize = -1;
 		if (0x00 == frame[0] && 0x00 == frame[1])
@@ -227,7 +226,6 @@ namespace  detu_record
 		if (ret < 0) {
 			av_strerror(ret, buf, 1024);
 		}
-		av_packet_unref(&pkt);
 
 		return 0;
 	}
