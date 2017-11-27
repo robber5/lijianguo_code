@@ -47,10 +47,10 @@ using namespace detu_record;
 #define CH3_VIDEO_DIR "chn3"
 #define AVS_VIDEO_DIR "avs"
 
-#define RECORD_DIVIDE_TIME (20*60*1000*1000) //second
+#define RECORD_DIVIDE_TIME (3*60*1000*1000) //second
 #define PID_NULL			((pid_t)(-1))
 
-#define PACKET_SIZE_MAX (10*1024*1024)
+#define PACKET_SIZE_MAX (15*1024*1024)
 
 #define CHN_COUNT 5
 
@@ -489,6 +489,7 @@ start_record:
 						framelist_node->gopsize += packetSize;
 						if (UNCOMPLETE == Is_the_frame_completed(packet, framelist_node->entype))//组合第一帧数据
 						{
+							framelist_node->packetSize[frame_count] += packetSize;
 							break;
 						}
 						frame_count = framelist_node->frame_count++;
@@ -502,7 +503,7 @@ start_record:
 						{
 							framelist_node->pts[frame_count] = (pts - start_time[index])/1000;
 						}
-						framelist_node->packetSize[frame_count] = packetSize;
+						framelist_node->packetSize[frame_count] += packetSize;
 						if (Is_the_Iframe(packet, framelist_node->entype) || ((FRAME_COUNT_MAX - 1) <= framelist_node->frame_count))
 						{
 							if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
@@ -667,6 +668,7 @@ static void *record_write_mp4_thread(void *p)
 	}
 
 exit:
+
 	for (chn = 0; chn < CHN_COUNT; chn++)
 	{
 		mp4_encoder[chn].GetFileState(state);
@@ -889,12 +891,12 @@ int record_thread_destroy(void)
 	pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//唤醒stop状态的线程
 
 	pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
-	pthread_cond_signal(&s_framelist_info->cond);//退出写线程
 	if (s_p_record_thd_param->gpid != PID_NULL)
 	{
 		pthread_join(s_p_record_thd_param->gpid, 0);
 		s_p_record_thd_param->gpid = PID_NULL;
 	}
+	pthread_cond_signal(&s_framelist_info->cond);//退出写线程
 	if (s_p_record_thd_param->wpid != PID_NULL)
 	{
 		pthread_join(s_p_record_thd_param->wpid, 0);
