@@ -58,6 +58,8 @@ using namespace detu_record;
 
 #define FRAME_COUNT_MAX 35
 
+#define FLUSH_CMD "echo 1 > /proc/sys/vm/drop_caches"
+
 
 typedef enum
 {
@@ -98,6 +100,7 @@ typedef struct record_thread_params
 	unsigned int delay_time; //延时录像时间
 	unsigned int divide_time; //分时录像时间
 	pthread_t           gpid;
+	pthread_t           fpid;
 	pthread_t           wpid;
 	volatile THD_STAT_E thd_stat;
 	RECORD_COND_S		record_cond;//条件变量，录像控制
@@ -565,6 +568,31 @@ err:
 
 }
 
+static void *record_flush_cache_thread(void *p)//每写四次gop，flush一次
+{
+	while (s_record_enable_flag)
+	{
+		pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+		while ((THD_STAT_START != s_p_record_thd_param->thd_stat) && (THD_STAT_QUIT != s_p_record_thd_param->thd_stat))
+		{
+			pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);
+		}
+		pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
+
+		if (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)
+		{
+			break;//record destroy
+		}
+		while (THD_STAT_START == s_p_record_thd_param->thd_stat)
+		{
+			sleep(10);
+			sync();
+			system(FLUSH_CMD);
+		}
+
+	}
+}
+
 static void *record_write_mp4_thread(void *p)
 {
 	int ret = OK;
@@ -633,6 +661,7 @@ static void *record_write_mp4_thread(void *p)
 		list_del_init(&framelist_node->list);
 		s_framelist_info->gop_count--;
 		free(framelist_node);
+		//record_flush_cache();
 		pthread_mutex_unlock(&s_framelist_info->mutex);
 
 	}
@@ -712,10 +741,17 @@ static int record_thread_create(void)
 	if (0 != pthread_create(&s_p_record_thd_param->wpid, NULL, record_write_mp4_thread, NULL))
 	{
 		perror("pthread_create failed");
-		printf("pthread_create get frame thread failed\n");
+		printf("pthread_create write mp4 thread failed\n");
 		return ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->wpid, "recw\0");
+	if (0 != pthread_create(&s_p_record_thd_param->fpid, NULL, record_flush_cache_thread, NULL))
+	{
+		perror("pthread_create failed");
+		printf("pthread_create flush cache thread failed\n");
+		return ERROR;
+	}
+	pthread_setname_np(s_p_record_thd_param->fpid, "recf\0");
 	s_p_record_thd_param->thd_stat = THD_STAT_IDLE;
 
 	return OK;
@@ -790,6 +826,7 @@ static int record_param_init(void)
 	s_p_record_thd_param->delay_time = 0;
 	s_p_record_thd_param->divide_time = RECORD_DIVIDE_TIME;
 	s_p_record_thd_param->gpid = PID_NULL;
+	s_p_record_thd_param->fpid = PID_NULL;
 	s_p_record_thd_param->wpid = PID_NULL;
 	s_p_record_thd_param->thd_stat = THD_STAT_IDLE;
 	s_p_record_thd_param->stream_t = MEDIA_TYPE_VIDEO;
@@ -848,10 +885,9 @@ int record_thread_destroy(void)
 	s_record_enable_flag = FALSE;
 	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
 	s_p_record_thd_param->thd_stat = THD_STAT_QUIT;
-	if (THD_STAT_START != s_p_record_thd_param->thd_stat)
-	{
-		pthread_cond_signal(&s_p_record_thd_param->record_cond.cond);
-	}
+
+	pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//唤醒stop状态的线程
+
 	pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
 	pthread_cond_signal(&s_framelist_info->cond);//退出写线程
 	if (s_p_record_thd_param->gpid != PID_NULL)
@@ -863,6 +899,11 @@ int record_thread_destroy(void)
 	{
 		pthread_join(s_p_record_thd_param->wpid, 0);
 		s_p_record_thd_param->wpid = PID_NULL;
+	}
+	if (s_p_record_thd_param->fpid != PID_NULL)
+	{
+		pthread_join(s_p_record_thd_param->fpid, 0);
+		s_p_record_thd_param->fpid = PID_NULL;
 	}
 
 	if (TRUE == s_sd_card_mount)
