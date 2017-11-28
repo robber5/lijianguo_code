@@ -17,6 +17,11 @@
 
 using namespace detu_media;
 
+#define ERROR (-1)
+#define OK 0
+#define TRUE 1
+#define FALSE 0
+
 typedef enum
 {
 	THD_STAT_IDLE,

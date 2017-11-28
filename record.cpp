@@ -54,9 +54,9 @@ using namespace detu_record;
 
 #define CHN_COUNT 5
 
-#define GOP_COUNT_MAX 12
+//#define GOP_COUNT_MAX 12
 
-#define FRAME_COUNT_MAX 35
+#define FRAME_COUNT_MAX 16
 
 #define FLUSH_CMD "echo 1 > /proc/sys/vm/drop_caches"
 
@@ -118,10 +118,8 @@ typedef struct framelist_s
 	int last; //是否是最后一帧数据
 	int first; //是否是第一帧数据
 
-	Uint32_t pts[FRAME_COUNT_MAX];
-	Uint32_t packetSize[FRAME_COUNT_MAX];
-	Uint32_t gopsize;
-	Uint32_t frame_count;
+	Uint32_t pts;
+	Uint32_t packetSize;
 	CODEC_TYPE_E		entype;//编码类型
 	LIST_HEAD_S list;
 
@@ -131,7 +129,7 @@ typedef struct listinfo_s
 {
 	pthread_cond_t cond;
 	pthread_mutex_t mutex;
-	Uint32_t gop_count;
+	Uint32_t frame_count;
 	FRAMELIST_S *listhead;
 } LISTINFO_S;
 
@@ -238,7 +236,7 @@ static void record_get_mp4_filename(char *filename, int index)
 	struct tm local_time;  
 	localtime_r(&time_seconds, &local_time);  
 
-	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,  
+	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", "/tmp/", s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,  
 		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
 
 	return;
@@ -294,16 +292,16 @@ static FRAMELIST_S *record_alloc_framelist_node(void)
 	return framelist_node;
 }
 
-static int32_t record_add_gop(FRAMELIST_S *goplist_node)
+static int32_t record_add_frame(FRAMELIST_S *goplist_node)
 {
 	if ((NULL != s_framelist_info) && (NULL != s_framelist_head) && (NULL != goplist_node))
 	{
 		pthread_mutex_lock(&s_framelist_info->mutex);
-		if (GOP_COUNT_MAX > s_framelist_info->gop_count)
+		if (FRAME_COUNT_MAX > s_framelist_info->frame_count)
 		{
 			list_add_tail(&goplist_node->list, &s_framelist_head->list);
-			s_framelist_info->gop_count++;
-			if (1 == s_framelist_info->gop_count)
+			s_framelist_info->frame_count++;
+			if (1 == s_framelist_info->frame_count)
 			{
 				pthread_cond_signal(&s_framelist_info->cond);
 			}
@@ -477,43 +475,38 @@ start_record:
 							s_framelist_node[index]->entype = s_p_record_thd_param->entype;
 						}
 						framelist_node = s_framelist_node[index];
-						packet = framelist_node->frame + framelist_node->gopsize;
-						packetSize = PACKET_SIZE_MAX - framelist_node->gopsize;
+						packet = framelist_node->frame + framelist_node->packetSize;
+						packetSize = PACKET_SIZE_MAX - framelist_node->packetSize;
 						if (-1 == videoEncoder.getStream(chn[index], packet, packetSize, pts))
 						{
-							record_add_gop(framelist_node);
+							record_add_frame(framelist_node);
 							s_framelist_node[index] = NULL;
 							break;
 						}
 						//printf("chn:%d, packet size:%d\n", fd_found[i], packetSize);
-						framelist_node->gopsize += packetSize;
 						if (UNCOMPLETE == Is_the_frame_completed(packet, framelist_node->entype))//组合第一帧数据
 						{
-							framelist_node->packetSize[frame_count] += packetSize;
+							framelist_node->packetSize += packetSize;
 							break;
 						}
-						frame_count = framelist_node->frame_count++;
+						framelist_node->packetSize += packetSize;
 						if (0 == start_time[index])
 						{
 							start_time[index] = pts;
 							framelist_node->first = TRUE;//文件的第一组gop，新建MP4文件
-							framelist_node->pts[frame_count] = 0;
+							framelist_node->pts = 0;
 						}
 						else
 						{
-							framelist_node->pts[frame_count] = (pts - start_time[index])/1000;
+							framelist_node->pts = (pts - start_time[index])/1000;
 						}
-						framelist_node->packetSize[frame_count] += packetSize;
-						if (Is_the_Iframe(packet, framelist_node->entype) || ((FRAME_COUNT_MAX - 1) <= framelist_node->frame_count))
+						if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
 						{
-							if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
-							{
-								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
-								start_time[index] = 0;
-							}
-							record_add_gop(framelist_node);
-							s_framelist_node[index] = NULL;//处理完数据指针置为NULL
+							framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
+							start_time[index] = 0;
 						}
+						record_add_frame(framelist_node);
+						s_framelist_node[index] = NULL;//处理完数据指针置为NULL
 
 					}
 					break;
@@ -529,7 +522,7 @@ err:
 							videoEncoder.stopRecvStream(chn[0]);
 							s_framelist_node[0]->last = TRUE;
 							s_framelist_node[0]->first = FALSE;
-							record_add_gop(s_framelist_node[0]);
+							record_add_frame(s_framelist_node[0]);
 							s_framelist_node[0] = NULL;
 							start_time[0] = 0;
 						}
@@ -543,7 +536,7 @@ err:
 								videoEncoder.stopRecvStream(chn[i]);
 								s_framelist_node[i]->last = TRUE;
 								s_framelist_node[i]->first = FALSE;
-								record_add_gop(s_framelist_node[i]);
+								record_add_frame(s_framelist_node[i]);
 								s_framelist_node[i] = NULL;
 								start_time[i] = 0;
 							}
@@ -586,7 +579,7 @@ static void *record_flush_cache_thread(void *p)//每写四次gop，flush一次
 		}
 		while (THD_STAT_START == s_p_record_thd_param->thd_stat)
 		{
-			sleep(10);
+			sleep(1);
 			sync();
 			system(FLUSH_CMD);
 		}
@@ -599,7 +592,6 @@ static void *record_write_mp4_thread(void *p)
 	int ret = OK;
 	int chn = -1;
 	int state = 0;
-	int i = 0;
 	int offset = 0;
 
 	Mp4Encoder *mp4_encoder = new Mp4Encoder[CHN_COUNT];
@@ -612,22 +604,22 @@ static void *record_write_mp4_thread(void *p)
 
 	while (s_record_enable_flag)
 	{
-		if (0 == s_framelist_info->gop_count)
+		if (0 == s_framelist_info->frame_count)
 		{
 			pthread_mutex_lock(&s_framelist_info->mutex);
-			if (0 == s_framelist_info->gop_count)
+			if (0 == s_framelist_info->frame_count)
 			{
 				do
 				{	
 					pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
 					if(((FALSE == s_record_enable_flag)
-						|| (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)) && (0 == s_framelist_info->gop_count))
+						|| (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)) && (0 == s_framelist_info->frame_count))
 					{
 						pthread_mutex_unlock(&s_framelist_info->mutex);
 						goto exit;//退出线程
 					}
 						
-				}while(0 == s_framelist_info->gop_count);
+				}while(0 == s_framelist_info->frame_count);
 			}
 			pthread_mutex_unlock(&s_framelist_info->mutex);
 		}
@@ -644,13 +636,9 @@ static void *record_write_mp4_thread(void *p)
 				goto exit;
 			}
 		}
-		for (i = 0, offset = 0; i < framelist_node->frame_count; i++)
+		if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame, framelist_node->packetSize, framelist_node->pts)))
 		{
-			if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
-			{
-				DBG_INFO("Write video frame failed\n");
-			}
-			offset += framelist_node->packetSize[i];
+			DBG_INFO("Write video frame failed\n");
 		}
 		if (TRUE == framelist_node->last)
 		{
@@ -660,7 +648,7 @@ static void *record_write_mp4_thread(void *p)
 		}
 		pthread_mutex_lock(&s_framelist_info->mutex);
 		list_del_init(&framelist_node->list);
-		s_framelist_info->gop_count--;
+		s_framelist_info->frame_count--;
 		free(framelist_node);
 		//record_flush_cache();
 		pthread_mutex_unlock(&s_framelist_info->mutex);
@@ -691,7 +679,7 @@ static int record_framelist_init(void)
 		printf("filelist_init failed\n");
 		return ERROR;
 	}
-	s_framelist_info->gop_count = 0;
+	s_framelist_info->frame_count = 0;
 	s_framelist_info->mutex = PTHREAD_MUTEX_INITIALIZER;
 	s_framelist_info->cond = PTHREAD_COND_INITIALIZER;
 	s_framelist_info->listhead = (FRAMELIST_S *)malloc(sizeof(FRAMELIST_S));
@@ -864,7 +852,7 @@ static int record_framelist_destroy(void)
 		{  
 			framelist_node = list_entry(pos, FRAMELIST_S, list); //获取双链表结构体的地址
 			list_del_init(pos);
-			s_framelist_info->gop_count--;
+			s_framelist_info->frame_count--;
 			free(framelist_node);
 		}
 		free(s_framelist_head);
