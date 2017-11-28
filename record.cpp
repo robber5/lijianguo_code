@@ -236,7 +236,7 @@ static void record_get_mp4_filename(char *filename, int index)
 	struct tm local_time;  
 	localtime_r(&time_seconds, &local_time);  
 
-	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", "/tmp/", s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,  
+	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,  
 		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
 
 	return;
