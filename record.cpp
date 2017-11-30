@@ -24,16 +24,12 @@
 #include "mp4_encoder.h"
 #include "record.h"
 #include "storage.h"
+#include "media.h"
 
 
 using namespace detu_media;
 using namespace detu_record;
 
-#define CHN0 0
-#define CHN1 1
-#define CHN2 2
-#define CHN3 3
-#define CHN4 4
 #define ERROR (-1)
 #define OK 0
 #define TRUE 1
@@ -59,6 +55,8 @@ using namespace detu_record;
 #define FRAME_COUNT_MAX 16
 
 #define FLUSH_CMD "echo 1 > /proc/sys/vm/drop_caches"
+
+#define FILE_SIZE_MAX (2*1000*1000*1000)
 
 
 typedef enum
@@ -247,19 +245,19 @@ static void record_set_chn(int *chn, CODEC_TYPE_E encode_type)
 {
 	if (CODEC_H264 == encode_type)
 	{
-		chn[0] = 12;
-		chn[1] = 4;
-		chn[2] = 5;
-		chn[3] = 6;
-		chn[4] = 7;
+		chn[0] = CHN12_AVS_H264;
+		chn[1] = CHN4_PIPE0_H264;
+		chn[2] = CHN5_PIPE1_H264;
+		chn[3] = CHN6_PIPE2_H264;
+		chn[4] = CHN7_PIPE3_H264;
 	}
 	else
 	{
-		chn[0] = 0;
-		chn[1] = 0;
-		chn[2] = 1;
-		chn[3] = 2;
-		chn[4] = 3;
+		chn[0] = CHN13_AVS_H265;
+		chn[1] = CHN0_PIPE0_H265;
+		chn[2] = CHN1_PIPE1_H265;
+		chn[3] = CHN2_PIPE2_H265;
+		chn[4] = CHN3_PIPE3_H265;
 	}
 }
 
@@ -286,8 +284,10 @@ static FRAMELIST_S *record_alloc_framelist_node(void)
 	{
 		return NULL;
 	}
-	memset(framelist_node, 0, sizeof(FRAMELIST_S));
-	//framelist_node->packetSize = 0;
+	//memset(framelist_node, 0, sizeof(FRAMELIST_S));
+	framelist_node->packetSize = 0;
+	framelist_node->first = FALSE;
+	framelist_node->last = FALSE;
 
 	return framelist_node;
 }
@@ -334,6 +334,7 @@ static void *record_get_frame_thread(void *p)
 	Uint64_t last_pts = 0;
 	int result = 0;
 	Uint64_t start_time[CHN_COUNT] = {0};
+	Uint32_t file_size[CHN_COUNT] = {0};
 	fd_set inputs, testfds;
 	struct timeval timeout;
 	int fd[CHN_COUNT];
@@ -493,17 +494,26 @@ start_record:
 						if (0 == start_time[index])
 						{
 							start_time[index] = pts;
+							file_size[index] = 0;
 							framelist_node->first = TRUE;//文件的第一组gop，新建MP4文件
 							framelist_node->pts = 0;
 						}
 						else
 						{
 							framelist_node->pts = (pts - start_time[index])/1000;
+							file_size[index] += framelist_node->packetSize;
 						}
 						if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
 						{
 							framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
 							start_time[index] = 0;
+							file_size[index] = 0;
+						}
+						else if (FILE_SIZE_MAX <= file_size[index])//文件大小不能超过2G
+						{
+							framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
+							start_time[index] = 0;
+							file_size[index] = 0;
 						}
 						record_add_frame(framelist_node);
 						s_framelist_node[index] = NULL;//处理完数据指针置为NULL
@@ -525,6 +535,7 @@ err:
 							record_add_frame(s_framelist_node[0]);
 							s_framelist_node[0] = NULL;
 							start_time[0] = 0;
+							file_size[0] = 0;
 						}
 					}
 					else
@@ -539,6 +550,7 @@ err:
 								record_add_frame(s_framelist_node[i]);
 								s_framelist_node[i] = NULL;
 								start_time[i] = 0;
+								file_size[i] = 0;
 							}
 						}
 					}
@@ -606,6 +618,19 @@ static void *record_write_mp4_thread(void *p)
 	{
 		if (0 == s_framelist_info->frame_count)
 		{
+			if (THD_STAT_STOP == s_p_record_thd_param->thd_stat)
+			{
+				for (chn = 0; chn < CHN_COUNT; chn++)
+				{
+					mp4_encoder[chn].GetFileState(state);
+					if (1 == state)//open 状态需关闭
+					{
+						mp4_encoder[chn].Close();
+						mp4_encoder[chn].Release();
+					}
+				}
+
+			}
 			pthread_mutex_lock(&s_framelist_info->mutex);
 			if (0 == s_framelist_info->frame_count)
 			{
