@@ -327,6 +327,7 @@ static void *record_get_frame_thread(void *p)
 	int fd_max = -1;
 	int i = 0, j = 0, chn_num = 0;
 	int chn[CHN_COUNT] = {0};
+	uint32_t seq[CHN_COUNT] = {0u};
 	int frame_count = 0;
 	Uint8_t *packet = NULL;
 	Uint32_t packetSize = PACKET_SIZE_MAX;
@@ -478,7 +479,7 @@ start_record:
 						framelist_node = s_framelist_node[index];
 						packet = framelist_node->frame + framelist_node->packetSize;
 						packetSize = PACKET_SIZE_MAX - framelist_node->packetSize;
-						if (-1 == videoEncoder.getStream(chn[index], packet, packetSize, pts))
+						if (-1 == videoEncoder.getStream(chn[index], seq[index], packet, packetSize, pts))
 						{
 							record_add_frame(framelist_node);
 							s_framelist_node[index] = NULL;

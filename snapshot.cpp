@@ -116,6 +116,7 @@ void *snapshot_thread(void *p)
 	Uint32_t packetSize = PACKET_SIZE_MAX;
 	Uint64_t pts;
 	Uint32_t chn = p_gs_snapshot_thd_param->chn;
+	Uint32_t seq = 0u;
 	char filename[FILE_NAME_LEN_MAX];
 	int fd;
 	FILE *fp = NULL;
@@ -155,7 +156,7 @@ void *snapshot_thread(void *p)
 					break;
 				default:
 
-					videoEncoder.getStream(chn, packet, packetSize, pts);
+					videoEncoder.getStream(chn, seq, packet, packetSize, pts);
 					break;
 			}
 			record_get_jpeg_filename(filename, chn-7);
