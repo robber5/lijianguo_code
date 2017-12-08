@@ -13,6 +13,7 @@
 #include "types.h"
 #include "storage.h"
 #include "record_search.h"
+#include "media.h"
 
 
 using namespace detu_media;
@@ -41,6 +42,7 @@ typedef enum
 
 typedef enum
 {
+	SNAPSHOT_MODE_IDLE,
 	SNAPSHOT_MODE_SINGLE,
 	SNAPSHOT_MODE_SERIES,
 	SNAPSHOT_MODE_MAX,
@@ -91,6 +93,10 @@ static char s_picture_dir[CHN_COUNT][16] = {AVS_VIDEO_DIR, CH0_VIDEO_DIR, CH1_VI
 
 #define PID_NULL			((pid_t)(-1))
 
+#define PIC_COUNT_MIN 5
+
+static unsigned int s_pic_count = 0;
+
 
 static void record_get_jpeg_filename(char *filename, int index)
 {
@@ -136,7 +142,6 @@ void *snapshot_thread(void *p)
 		videoEncoder.getFd(chn, fd);
 		FD_ZERO(&inputs);
 		FD_SET(fd,&inputs);
-		printf("fd is %d\n", fd);
 
 #if 1
 		while (THD_STAT_START == p_gs_snapshot_thd_param->thd_stat)
@@ -165,15 +170,14 @@ void *snapshot_thread(void *p)
 				//todo 写入sd卡
 				if (NULL == (fp = fopen(filename, "wb")))
 				{
-				    printf("can not open jpeg file\n");
+				    printf("can not open jpeg file:%s\n", filename);
 				    break;
 				}
 				fwrite(packet, sizeof(char), packetSize, fp);
 				printf("create file:%s\n", filename);
 				fflush(fp);
 				fclose(fp);
-				p_gs_snapshot_thd_param->thd_stat = THD_STAT_STOP;
-				break;
+				p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_IDLE;
 			}
 			else if (SNAPSHOT_MODE_SERIES == p_gs_snapshot_thd_param->snapshot_mode)
 			{
@@ -182,12 +186,14 @@ void *snapshot_thread(void *p)
 			}
 			else
 			{
-				p_gs_snapshot_thd_param->thd_stat = THD_STAT_STOP;
-				break;
+				//p_gs_snapshot_thd_param->thd_stat = THD_STAT_STOP;
+				s_pic_count++;
+				continue;
 			}
 		}
 		if (THD_STAT_STOP == p_gs_snapshot_thd_param->thd_stat)//退出拍照模式
 		{
+			s_pic_count = 0;
 			//todo 退出处理
 		}
 #endif
@@ -207,7 +213,7 @@ int snapshot_thread_create()
 		return ERROR;
 	}
 	pthread_setname_np(p_gs_snapshot_thd_param->pid, "snapshot\0");
-	p_gs_snapshot_thd_param->thd_stat = THD_STAT_START;
+	//p_gs_snapshot_thd_param->thd_stat = THD_STAT_START;
 
 	return OK;
 
@@ -215,26 +221,53 @@ int snapshot_thread_create()
 
 
 //连拍
-int snapshot_for_series_stop()
+void snapshot_for_series_stop()
 {
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
-	p_gs_snapshot_thd_param->thd_stat = THD_STAT_STOP;
+	p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_IDLE;
 	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
 
 }
 
-int snapshot_for_series_start()
+void snapshot_for_series_start()
 {
-	sem_post(&p_gs_snapshot_thd_param->wake_sem);
+	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
+	p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_SERIES;
+	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
+
 }
 
-int snapshot_for_once()
+void snapshot_for_once()
 {
+	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
+	while(PIC_COUNT_MIN <= s_pic_count)
+	{
+		usleep(100*1000);
+	}
+	p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_SINGLE;
+	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
+}
+
+void snapshot_start()
+{
+	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
+	enable_pic_mode();
 	p_gs_snapshot_thd_param->thd_stat = THD_STAT_START;
 	sem_post(&p_gs_snapshot_thd_param->wake_sem);
+	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
 }
 
-
+void snapshot_stop()
+{
+	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
+	while(SNAPSHOT_MODE_IDLE != p_gs_snapshot_thd_param->snapshot_mode)
+	{
+		usleep(100*1000);
+	}
+	p_gs_snapshot_thd_param->thd_stat = THD_STAT_STOP;
+	disable_pic_mode();
+	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
+}
 int snapshot_param_init()
 {
 	p_gs_snapshot_thd_param = (p_snapshot_thread_params_s)malloc(sizeof(SNAPSHOT_PARAMS_S));
@@ -249,7 +282,7 @@ int snapshot_param_init()
 	p_gs_snapshot_thd_param->thd_stat = THD_STAT_IDLE;
 	p_gs_snapshot_thd_param->exposure_mode = EXPOSURE_MODE_AUTO; //默认自动曝光
 	p_gs_snapshot_thd_param->exposure_time = EXPOSURE_TIME_AUTO;
-	p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_SINGLE;
+	p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_IDLE;
 	p_gs_snapshot_thd_param->chn = 8;
 	pthread_mutex_init(&p_gs_snapshot_thd_param->mutex, NULL);
 	sem_init(&(p_gs_snapshot_thd_param->wake_sem),0,0);//第二个如果不为0代表进程间共享sem，第三个代表sem值的初始值

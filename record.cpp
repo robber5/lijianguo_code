@@ -56,7 +56,7 @@ using namespace detu_record;
 
 #define FLUSH_CMD "echo 1 > /proc/sys/vm/drop_caches"
 
-#define FILE_SIZE_MAX (2*1000*1000*1000)
+#define FILE_SIZE_MAX (4*1000*1000*1000)
 
 
 typedef enum
@@ -538,6 +538,22 @@ err:
 							start_time[0] = 0;
 							file_size[0] = 0;
 						}
+						else
+						{
+							videoEncoder.stopRecvStream(chn[0]);
+							s_framelist_node[0] = record_alloc_framelist_node();
+							if (NULL != s_framelist_node[0])
+							{
+								s_framelist_node[0]->chn = 0;
+								s_framelist_node[0]->last = TRUE;
+								s_framelist_node[0]->first = FALSE;
+								record_add_frame(s_framelist_node[0]);
+								s_framelist_node[0] = NULL;
+							}
+							start_time[0] = 0;
+							file_size[0] = 0;
+						}
+
 					}
 					else
 					{
@@ -550,6 +566,22 @@ err:
 								s_framelist_node[i]->first = FALSE;
 								record_add_frame(s_framelist_node[i]);
 								s_framelist_node[i] = NULL;
+								start_time[i] = 0;
+								file_size[i] = 0;
+							}
+							else
+							{
+								videoEncoder.stopRecvStream(chn[i]);
+								s_framelist_node[i] = record_alloc_framelist_node();
+								if (NULL != s_framelist_node[i])
+								{
+									s_framelist_node[i]->chn = i;
+									s_framelist_node[i]->last = TRUE;
+									s_framelist_node[i]->first = FALSE;
+									s_framelist_node[i]->packetSize = 0;
+									record_add_frame(s_framelist_node[i]);
+									s_framelist_node[i] = NULL;
+								}
 								start_time[i] = 0;
 								file_size[i] = 0;
 							}
@@ -619,19 +651,6 @@ static void *record_write_mp4_thread(void *p)
 	{
 		if (0 == s_framelist_info->frame_count)
 		{
-			if (THD_STAT_STOP == s_p_record_thd_param->thd_stat)
-			{
-				for (chn = 0; chn < CHN_COUNT; chn++)
-				{
-					mp4_encoder[chn].GetFileState(state);
-					if (1 == state)//open 状态需关闭
-					{
-						mp4_encoder[chn].Close();
-						mp4_encoder[chn].Release();
-					}
-				}
-
-			}
 			pthread_mutex_lock(&s_framelist_info->mutex);
 			if (0 == s_framelist_info->frame_count)
 			{
