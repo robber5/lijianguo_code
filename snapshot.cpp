@@ -4,11 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <sys/types.h>   
-#include <sys/time.h>     
-#include <fcntl.h>   
-#include <sys/ioctl.h>   
-#include <unistd.h> 
+#include <sys/types.h>
+#include <sys/time.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 #include "video_encoder.h"
 #include "types.h"
 #include "storage.h"
@@ -102,18 +102,18 @@ static char s_picture_dir[CHN_COUNT][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VI
 
 #define PID_NULL			((pid_t)(-1))
 
-#define PIC_COUNT_MIN 40
+#define PIC_COUNT_MIN 35
 
 static unsigned int s_pic_count = 0;
 
 
 static void record_get_jpeg_filename(char *filename, int index)
 {
-	time_t time_seconds = time(NULL);  
-	struct tm local_time;  
-	localtime_r(&time_seconds, &local_time);  
+	time_t time_seconds = time(NULL);
+	struct tm local_time;
+	localtime_r(&time_seconds, &local_time);
 
-	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.jpg", MOUNT_DIR, s_picture_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,  
+	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.jpg", MOUNT_DIR, s_picture_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
 		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
 
 	return;
@@ -175,13 +175,13 @@ void *snapshot_thread(void *p)
 
 		while (THD_STAT_START == p_gs_snapshot_thd_param->thd_stat)
 		{
-			timeout.tv_sec = 2; 	 
+			timeout.tv_sec = 2;
 			timeout.tv_usec = 500000;
 			testfds = inputs;
 			packetSize = PACKET_SIZE_MAX;
-			result = select(fd + 1, &testfds, NULL, NULL, &timeout);	
+			result = select(fd + 1, &testfds, NULL, NULL, &timeout);
 			switch (result)
-			{   
+			{
 				case 0:
 					printf("timeout\n");
 					break;
@@ -218,7 +218,7 @@ void *snapshot_thread(void *p)
 			else if (SNAPSHOT_MODE_SERIES == p_gs_snapshot_thd_param->snapshot_mode)
 			{
 				//todo
-				
+
 			}
 			else
 			{
