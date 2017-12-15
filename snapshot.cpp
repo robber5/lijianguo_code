@@ -12,10 +12,12 @@
 #include "video_encoder.h"
 #include "types.h"
 #include "storage.h"
+#include "snapshot.h"
 #include "record_search.h"
+#include "config_manager.h"
 #include "media.h"
 
-
+using namespace detu_config_manager;
 using namespace detu_media;
 
 #define ERROR (-1)
@@ -23,14 +25,6 @@ using namespace detu_media;
 #define TRUE 1
 #define FALSE 0
 
-typedef enum
-{
-	THD_STAT_IDLE,
-	THD_STAT_START,
-	THD_STAT_STOP,
-	THD_STAT_QUIT,
-	THD_STAT_MAX,
-} THD_STAT_E;
 
 typedef enum
 {
@@ -40,13 +34,6 @@ typedef enum
 
 } EXPOSURE_MODE_E;
 
-typedef enum
-{
-	SNAPSHOT_MODE_IDLE,
-	SNAPSHOT_MODE_SINGLE,
-	SNAPSHOT_MODE_SERIES,
-	SNAPSHOT_MODE_MAX,
-} SNAPSHOT_MODE_E;
 
 typedef enum
 {
@@ -70,9 +57,9 @@ typedef struct snapshot_cond_s
 
 typedef struct snapshot_params
 {
-	unsigned int exposure_mode; //曝光模式
-	unsigned int exposure_time; //曝光时长
-	unsigned int snapshot_mode; //拍照模式；单拍，连拍
+	EXPOSURE_MODE_E exposure_mode; //曝光模式
+	EXPOSURE_TIME_E exposure_time; //曝光时长
+	SNAPSHOT_MODE_E snapshot_mode; //拍照模式；单拍，连拍
 	unsigned int delay_time; //延时拍照
 	unsigned int chn;//抓图通道
 	pthread_t           pid;
@@ -93,9 +80,19 @@ static p_snapshot_thread_params_s p_gs_snapshot_thd_param;
 #define CH3_VIDEO_DIR "chn3"
 #define AVS_VIDEO_DIR "avs"
 
+#define VALUE "value"
+#define SNAPSHOT_M "snapshot"
+#define SNAPSHOT_STATUS "status"
+#define DELAY_TIME "delay_time"
+#define PIC_CHN "chn"
+#define SNAPSHOT_MODE "mode"
+
 #define CHN_COUNT 6
 #define PACKET_SIZE_MAX (10*1024*1024)
 
+static char s_snapshot_status[THD_STAT_MAX][16] = {"idle", "start", "stop", "quit"};
+static char s_snapshot_mode[SNAPSHOT_MODE_MAX][16] = {"idle", "single", "series"};
+static char s_snapshot_chn[CHN_COUNT][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
 
 static char s_picture_dir[CHN_COUNT][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
 
@@ -249,6 +246,167 @@ void *snapshot_thread(void *p)
 	return 0;
 }
 
+static S_Result snapshot_trans_config(const Json::Value& config,SNAPSHOT_USER_CONFIG_S& usercfg)
+{
+	int i = 0;
+
+	for (i = 0; i < THD_STAT_MAX; i++)
+	{
+		if (!(config[SNAPSHOT_STATUS][VALUE].asString()).compare(s_snapshot_status[i]))
+		{
+			usercfg.thd_stat = (THD_STAT_E)i;
+			break;
+		}
+	}
+	for (i = 0; i < CHN_COUNT; i++)
+	{
+		if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
+		{
+			usercfg.chn = i;
+			break;
+		}
+	}
+	for (i = 0; i < SNAPSHOT_MODE_MAX; i++)
+	{
+		if (!(config[SNAPSHOT_MODE][VALUE].asString()).compare(s_snapshot_mode[i]))
+		{
+			usercfg.snapshot_mode = (SNAPSHOT_MODE_E)i;
+			break;
+		}
+	}
+
+	usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+
+	return S_OK;
+
+}
+
+
+static S_Result snapshot_check_config(const Json::Value& config)
+{
+	int delay_time = 0;
+	int i = 0;
+	int S_ret = S_OK;
+	delay_time = config[DELAY_TIME][VALUE].asInt();
+	do
+	{
+		for (i = 0; i < THD_STAT_MAX; i++)
+		{
+			if (!(config[SNAPSHOT_STATUS][VALUE].asString()).compare(s_snapshot_status[i]))
+			{
+				break;
+			}
+		}
+		if (THD_STAT_MAX == i)
+		{
+			S_ret = S_ERROR;
+			break;
+		}
+		for (i = 0; i < CHN_COUNT; i++)
+		{
+			if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
+			{
+				break;
+			}
+		}
+		if (CHN_COUNT == i)
+		{
+			S_ret = S_ERROR;
+			break;
+		}
+		for (i = 0; i < SNAPSHOT_MODE_MAX; i++)
+		{
+			if (!(config[SNAPSHOT_MODE][VALUE].asString()).compare(s_snapshot_mode[i]))
+			{
+				break;
+			}
+		}
+		if (SNAPSHOT_MODE_MAX == i)
+		{
+			S_ret = S_ERROR;
+			break;
+		}
+		if (0 > delay_time)
+		{
+			S_ret = S_ERROR;
+		}
+	}while (0);
+
+}
+
+
+
+S_Result snapshot_thread_cb(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
+{
+	SNAPSHOT_USER_CONFIG_S oldcfg,newcfg;
+	memset(&newcfg, 0, sizeof(newcfg));
+	memset(&oldcfg, 0, sizeof(oldcfg));
+
+	snapshot_trans_config(newConfig, newcfg);
+	snapshot_trans_config(oldConfig, oldcfg);
+
+	do
+	{
+		if (newcfg.thd_stat != oldcfg.thd_stat)
+		{
+			if (THD_STAT_STOP == newcfg.thd_stat)
+			{
+				snapshot_thread_stop();
+				break;
+			}
+			else
+			{
+				snapshot_thread_start(newcfg);
+				break;
+			}
+		}
+	} while (0);
+
+	return S_OK;
+}
+
+S_Result snapshot_thread_vd(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
+{
+	S_Result S_ret = S_OK;
+	S_ret = snapshot_check_config(newConfig);
+	if (S_OK != S_ret)
+	{
+		printf("config is not valid to set!\n");
+	}
+
+	return S_ret;
+}
+
+int snapshot_register_validator()
+{
+	ConfigManager& config = *ConfigManager::instance();
+
+	config.registerValidator(SNAPSHOT_M, &snapshot_thread_vd, 0);
+
+}
+
+int snapshot_register_callback()
+{
+	ConfigManager& config = *ConfigManager::instance();
+
+	config.registerCallback(SNAPSHOT_M, &snapshot_thread_cb, 0);
+}
+
+int snapshot_unregister_validator()
+{
+	ConfigManager& config = *ConfigManager::instance();
+
+	config.unregisterCallback(SNAPSHOT_M, &snapshot_thread_cb, 0);
+}
+
+int snapshot_unregister_callback()
+{
+	ConfigManager& config = *ConfigManager::instance();
+
+	config.unregisterCallback(SNAPSHOT_M, &snapshot_thread_vd, 0);
+}
+
+
 int snapshot_thread_create()
 {
 	if (0 != pthread_create(&p_gs_snapshot_thd_param->pid, NULL, snapshot_thread, NULL))
@@ -306,7 +464,7 @@ void snapshot_for_once()
 	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
 }
 
-void snapshot_start()
+void snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg)
 {
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
 	enable_pic_mode();
@@ -315,6 +473,9 @@ void snapshot_start()
 	{
 		p_gs_snapshot_thd_param->thd_stat = THD_STAT_START;
 		p_gs_snapshot_thd_param->snapshot_cond.stop = TRUE;
+		p_gs_snapshot_thd_param->snapshot_mode = usercfg.snapshot_mode;
+		p_gs_snapshot_thd_param->delay_time = usercfg.delay_time;
+		p_gs_snapshot_thd_param->chn = usercfg.chn;
 		pthread_cond_broadcast(&p_gs_snapshot_thd_param->snapshot_cond.cond);
 		do
 		{
@@ -325,7 +486,7 @@ void snapshot_start()
 	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
 }
 
-void snapshot_stop()
+void snapshot_thread_stop()
 {
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
 
@@ -354,6 +515,16 @@ static void snapshot_cond_init(SNAPSHOT_COND_S *snapshot_cond)
 
 int snapshot_param_init()
 {
+	ConfigManager& config = *ConfigManager::instance();
+
+	Json::Value recCfg, response;
+
+	SNAPSHOT_USER_CONFIG_S usercfg;
+
+	config.getConfig(SNAPSHOT_M, recCfg, response);
+
+	snapshot_trans_config(recCfg, usercfg);
+
 	p_gs_snapshot_thd_param = (p_snapshot_thread_params_s)malloc(sizeof(SNAPSHOT_PARAMS_S));
 	if (NULL == p_gs_snapshot_thd_param)
 	{
@@ -361,13 +532,13 @@ int snapshot_param_init()
 		printf("record_param_init failed\n");
 		return ERROR;
 	}
-	p_gs_snapshot_thd_param->delay_time = 0;
+	p_gs_snapshot_thd_param->delay_time = usercfg.delay_time;
 	p_gs_snapshot_thd_param->pid = PID_NULL;
-	p_gs_snapshot_thd_param->thd_stat = THD_STAT_IDLE;
+	p_gs_snapshot_thd_param->thd_stat = usercfg.thd_stat;
 	p_gs_snapshot_thd_param->exposure_mode = EXPOSURE_MODE_AUTO; //默认自动曝光
 	p_gs_snapshot_thd_param->exposure_time = EXPOSURE_TIME_AUTO;
 	p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_IDLE;
-	p_gs_snapshot_thd_param->chn = 8;
+	p_gs_snapshot_thd_param->chn = usercfg.chn;
 	pthread_mutex_init(&p_gs_snapshot_thd_param->mutex, NULL);
 	snapshot_cond_init(&p_gs_snapshot_thd_param->snapshot_cond);
 	//sem_init(&(p_gs_snapshot_thd_param->wake_sem),0,0);//第二个如果不为0代表进程间共享sem，第三个代表sem值的初始值
@@ -414,6 +585,8 @@ int snapshot_thread_destory()
 int snapshot_module_init()
 {
 	snapshot_param_init();
+	snapshot_register_callback();
+	snapshot_register_validator();
 	snapshot_thread_create();
 
 	return 0;
@@ -422,6 +595,8 @@ int snapshot_module_init()
 int snapshot_module_exit()
 {
 	snapshot_thread_destory();
+	snapshot_unregister_validator();
+	snapshot_unregister_callback();
 	snapshot_param_exit();
 
 	return 0;
@@ -444,6 +619,8 @@ int snapshot_set_chn(int chn)
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
 	p_gs_snapshot_thd_param->chn = chn;
 	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
+
+	return 0;
 }
 
 void snapshot_set_exposure_mode(EXPOSURE_MODE_E mode, EXPOSURE_TIME_E time)//设置曝光时间
