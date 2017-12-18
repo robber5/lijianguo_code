@@ -976,6 +976,12 @@ static int record_param_init(void)
 
 static int record_param_exit(void)
 {
+	Json::Value reccfg,response;
+	ConfigManager& config = *ConfigManager::instance();
+
+	config.getDefault("record.status.value", reccfg, response);
+	config.setConfig("record.status.value", reccfg, response);
+
 	record_cond_deinit(&s_p_record_thd_param->record_cond);
 	pthread_mutex_destroy(&s_p_record_thd_param->mutex);
 	if (NULL != s_p_record_thd_param)
