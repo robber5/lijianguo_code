@@ -32,18 +32,10 @@ using namespace detu_config_manager;
 using namespace detu_media;
 using namespace detu_record;
 
-#define ERROR (-1)
-#define OK 0
 #define TRUE 1
 #define FALSE 0
 #define UNCOMPLETE 0
 #define COMPLETE 1
-
-#define CH0_VIDEO_DIR "chn0"
-#define CH1_VIDEO_DIR "chn1"
-#define CH2_VIDEO_DIR "chn2"
-#define CH3_VIDEO_DIR "chn3"
-#define AVS_VIDEO_DIR "avs"
 
 #define RECORD_M "record"
 #define DELAY_TIME "delay_time"
@@ -54,7 +46,7 @@ using namespace detu_record;
 #define VALUE "value"
 
 #define RECORD_DIVIDE_TIME (3*60*1000*1000) //second
-#define PID_NULL			((pid_t)(-1))
+#define PID_NULL			((pthread_t)(-1))
 
 #define PACKET_SIZE_MAX (15*1024*1024)
 
@@ -68,7 +60,7 @@ using namespace detu_record;
 
 #define FLUSH_CMD "echo 1 > /proc/sys/vm/drop_caches"
 
-#define FILE_SIZE_MAX (4*1000*1000*1000)
+#define FILE_SIZE_MAX (4l*1000*1000*1000)
 
 
 typedef enum
@@ -86,6 +78,41 @@ typedef enum
 	NALU_TYPE_H265_SEI_PREFIX = 39,
 	NALU_TYPE_H265_SEI_SUFFIX = 40,
 } NALU_TYPE_E;
+
+typedef enum
+{
+	THD_STAT_IDLE,
+	THD_STAT_START,
+	THD_STAT_STOP,
+	THD_STAT_QUIT,
+	THD_STAT_MAX,
+} THD_STAT_E;
+
+typedef enum
+{
+	RECORD_MODE_SINGLE,
+	RECORD_MODE_MULTI,
+	RECORD_MODE_MAX,
+
+} RECORD_MODE_E;
+
+
+typedef enum
+{
+	CODEC_H264,
+	CODEC_H265,
+	CODEC_MAX,
+
+} CODEC_TYPE_E;
+
+typedef struct record_config
+{
+	unsigned int delay_time; //延时录像时间
+	THD_STAT_E thd_stat;
+	CODEC_TYPE_E entype;
+	RECORD_MODE_E record_mode;
+
+} RECORD_USER_CONFIG_S;
 
 typedef struct record_cond_s
 {
@@ -135,6 +162,7 @@ typedef struct listinfo_s
 	FRAMELIST_S *listhead;
 } LISTINFO_S;
 
+
 static char s_rec_status[THD_STAT_MAX][16] = {"idle", "start", "stop", "quit"};
 static char s_rec_mode[RECORD_MODE_MAX][16] = {"avs", "separate"};
 static char s_video_entype[CODEC_MAX][16] = {"H264", "H265"};
@@ -142,11 +170,16 @@ static char s_video_entype[CODEC_MAX][16] = {"H264", "H265"};
 static char s_video_dir[CHN_COUNT][16] = {AVS_VIDEO_DIR, CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR};
 static FRAMELIST_S *s_framelist_node[CHN_COUNT];
 static int s_record_enable_flag = TRUE;
-static int s_sd_card_mount = FALSE;
+
 static p_record_thread_params_s s_p_record_thd_param;
 
 static LISTINFO_S *s_framelist_info;
 static FRAMELIST_S *s_framelist_head;
+
+static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg);
+static S_Result record_thread_stop(void);
+static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg);
+
 
 static NALU_TYPE_E get_the_nalu_type(Uint8_t *packet, CODEC_TYPE_E encode_type)
 {
@@ -217,6 +250,7 @@ static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 	return ret;
 }
 
+/*
 static int Is_the_Iframe(Uint8_t *packet, CODEC_TYPE_E encode_type)
 {
 	int ret = FALSE;
@@ -234,6 +268,7 @@ static int Is_the_Iframe(Uint8_t *packet, CODEC_TYPE_E encode_type)
 
 	return ret;
 }
+*/
 
 static int Is_gopsize_reach_mark(Uint32_t packetSize)
 {
@@ -249,7 +284,7 @@ static int Is_gopsize_reach_mark(Uint32_t packetSize)
 
 }
 
-static void record_get_mp4_filename(char *filename, int index)
+static S_Result record_get_mp4_filename(char *filename, int index)
 {
 	time_t time_seconds = time(NULL);
 	struct tm local_time;
@@ -258,11 +293,11 @@ static void record_get_mp4_filename(char *filename, int index)
 	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
 		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
 
-	return;
+	return S_OK;
 }
 
 
-static void record_set_chn(int *chn, CODEC_TYPE_E encode_type)
+static S_Result record_set_chn(int *chn, CODEC_TYPE_E encode_type)
 {
 	if (CODEC_H264 == encode_type)
 	{
@@ -280,6 +315,8 @@ static void record_set_chn(int *chn, CODEC_TYPE_E encode_type)
 		chn[3] = CHN2_PIPE2_H265;
 		chn[4] = CHN3_PIPE3_H265;
 	}
+
+	return S_OK;
 }
 
 
@@ -311,7 +348,7 @@ static FRAMELIST_S *record_alloc_framelist_node(void)
 	return framelist_node;
 }
 
-static int32_t record_add_gop(FRAMELIST_S *goplist_node)
+static S_Result record_add_gop(FRAMELIST_S *goplist_node)
 {
 	if ((NULL != s_framelist_info) && (NULL != s_framelist_head) && (NULL != goplist_node))
 	{
@@ -334,15 +371,14 @@ static int32_t record_add_gop(FRAMELIST_S *goplist_node)
 	}
 	else
 	{
-		return ERROR;
+		return S_ERROR;
 	}
 
-	return OK;
+	return S_OK;
 }
 
 static void *record_get_frame_thread(void *p)
 {
-	int ret = 0;
 	int fd_max = -1;
 	int i = 0, j = 0, chn_num = 0;
 	int chn[CHN_COUNT] = {0};
@@ -351,10 +387,9 @@ static void *record_get_frame_thread(void *p)
 	Uint8_t *packet = NULL;
 	Uint32_t packetSize = PACKET_SIZE_MAX;
 	Uint64_t pts = 0;
-	Uint64_t last_pts = 0;
 	int result = 0;
 	Uint64_t start_time[CHN_COUNT] = {0};
-	Uint32_t file_size[CHN_COUNT] = {0};
+	Uint64_t file_size[CHN_COUNT] = {0};
 	fd_set inputs, testfds;
 	struct timeval timeout;
 	int fd[CHN_COUNT];
@@ -367,7 +402,7 @@ static void *record_get_frame_thread(void *p)
 #if 1
 	while (s_record_enable_flag)
 	{
-start_record:
+
 		pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
 		while ((THD_STAT_START != s_p_record_thd_param->thd_stat) && (THD_STAT_QUIT != s_p_record_thd_param->thd_stat))
 		{
@@ -404,18 +439,15 @@ start_record:
 			3.失败 goto start_record，提醒用户进行相关操作并重试。
 		*/
 
-		if (FALSE == s_sd_card_mount)
+
+		if (S_ERROR == storage_sdcard_check())
 		{
-			if (ERROR == storage_mount_sdcard(MOUNT_DIR, DEV_NAME))
-			{
-				pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
-				s_p_record_thd_param->record_cond.wake_success = FALSE;
-				pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//通知录像启动失败
-				s_p_record_thd_param->thd_stat = THD_STAT_STOP;
-				pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
-				continue;
-			}
-			s_sd_card_mount = TRUE;
+			pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+			s_p_record_thd_param->record_cond.wake_success = FALSE;
+			pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//通知录像启动失败
+			s_p_record_thd_param->thd_stat = THD_STAT_STOP;
+			pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
+			continue;
 		}
 
 		sleep(s_p_record_thd_param->delay_time);
@@ -595,7 +627,7 @@ err:
 	}
 #endif
 
-	return (void *)OK;
+	return (void *)S_OK;
 
 }
 
@@ -622,14 +654,14 @@ static void *record_flush_cache_thread(void *p)//每写四次gop，flush一次
 		}
 
 	}
+	return (void *)S_OK;
 }
 
 static void *record_write_mp4_thread(void *p)
 {
-	int ret = OK;
 	int chn = -1;
 	int state = 0;
-	int i = 0;
+	unsigned int i = 0;
 	int offset = 0;
 
 	Mp4Encoder *mp4_encoder = new Mp4Encoder[CHN_COUNT];
@@ -709,17 +741,17 @@ exit:
 		}
 	}
 	delete []mp4_encoder;
-	return (void *)OK;
+	return (void *)S_OK;
 }
 
-static int record_framelist_init(void)
+static S_Result record_framelist_init(void)
 {
 	s_framelist_info = (LISTINFO_S *)malloc(sizeof(LISTINFO_S));
 	if (NULL == s_framelist_info)
 	{
 		perror("s_fileinfo malloc failed:");
 		printf("filelist_init failed\n");
-		return ERROR;
+		return S_ERROR;
 	}
 	s_framelist_info->gop_count = 0;
 	s_framelist_info->mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -729,24 +761,24 @@ static int record_framelist_init(void)
 	{
 		perror("s_fileinfo->head malloc failed:");
 		printf("filelist_init failed\n");
-		return ERROR;
+		return S_ERROR;
 	}
 	INIT_LIST_HEAD(&s_framelist_info->listhead->list);
 	s_framelist_head = s_framelist_info->listhead;
 
-	return OK;
+	return S_OK;
 }
 
 
-static int record_thread_create(void)
+static S_Result record_thread_create(void)
 {
 //	pthread_attr_t attr1,attr2;
 //	struct sched_param param;
 
-	if (OK != record_framelist_init())
+	if (S_OK != record_framelist_init())
 	{
 		printf("pthread_create get frame thread failed\n");
-		return ERROR;
+		return S_ERROR;
 	}
 /*
 	pthread_attr_init(&attr1);
@@ -767,30 +799,30 @@ static int record_thread_create(void)
 	{
 		perror("pthread_create failed");
 		printf("pthread_create get frame thread failed\n");
-		return ERROR;
+		return S_ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->gpid, "recg\0");
 	if (0 != pthread_create(&s_p_record_thd_param->wpid, NULL, record_write_mp4_thread, NULL))
 	{
 		perror("pthread_create failed");
 		printf("pthread_create write mp4 thread failed\n");
-		return ERROR;
+		return S_ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->wpid, "recw\0");
 	if (0 != pthread_create(&s_p_record_thd_param->fpid, NULL, record_flush_cache_thread, NULL))
 	{
 		perror("pthread_create failed");
 		printf("pthread_create flush cache thread failed\n");
-		return ERROR;
+		return S_ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->fpid, "recf\0");
 	s_p_record_thd_param->thd_stat = THD_STAT_IDLE;
 
-	return OK;
+	return S_OK;
 
 }
 
-void record_thread_stop(void)
+static S_Result record_thread_stop(void)
 {
 	pthread_mutex_lock(&s_p_record_thd_param->mutex);
 
@@ -806,10 +838,14 @@ void record_thread_stop(void)
 	pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
 
 	pthread_mutex_unlock(&s_p_record_thd_param->mutex);
+
+	return S_OK;
 }
 
-void record_thread_start(RECORD_USER_CONFIG_S usercfg)
+static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg)
 {
+	S_Result S_ret = S_OK;
+
 	pthread_mutex_lock(&s_p_record_thd_param->mutex);
 
 	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
@@ -827,6 +863,7 @@ void record_thread_start(RECORD_USER_CONFIG_S usercfg)
 			if (FALSE == s_p_record_thd_param->record_cond.wake_success)
 			{
 				s_p_record_thd_param->record_cond.wake_success = TRUE;//置为初始值
+				S_ret = S_ERROR;
 				break;//启动失败退出
 			}
 		}while(FALSE == s_p_record_thd_param->record_cond.wake);
@@ -834,6 +871,8 @@ void record_thread_start(RECORD_USER_CONFIG_S usercfg)
 	pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
 
 	pthread_mutex_unlock(&s_p_record_thd_param->mutex);
+
+	return S_ret;
 }
 
 static void record_cond_init(RECORD_COND_S *record_cond)
@@ -889,7 +928,7 @@ static S_Result record_check_config(const Json::Value& config)
 {
 	int delay_time = 0;
 	int i = 0;
-	int S_ret = S_OK;
+	S_Result S_ret = S_OK;
 	delay_time = config[DELAY_TIME][VALUE].asInt();
 	do
 	{
@@ -935,10 +974,12 @@ static S_Result record_check_config(const Json::Value& config)
 		}
 	}while (0);
 
+	return S_ret;
+
 }
 
 
-static int record_param_init(void)
+static S_Result record_param_init(void)
 {
 	ConfigManager& config = *ConfigManager::instance();
 
@@ -955,7 +996,7 @@ static int record_param_init(void)
 	{
 		perror("gs_record_thd_param malloc failed:");
 		printf("record_param_init failed\n");
-		return ERROR;
+		return S_ERROR;
 	}
 	s_p_record_thd_param->delay_time = usercfg.delay_time;
 	s_p_record_thd_param->divide_time = RECORD_DIVIDE_TIME;
@@ -970,11 +1011,11 @@ static int record_param_init(void)
 	record_cond_init(&s_p_record_thd_param->record_cond);
 
 	//sem_init(&(s_p_record_thd_param->wake_sem),0,0);//第二个如果不为0代表进程间共享sem，第三个代表sem值的初始值
-	return OK;
+	return S_OK;
 }
 
 
-static int record_param_exit(void)
+static S_Result record_param_exit(void)
 {
 	Json::Value reccfg,response;
 	ConfigManager& config = *ConfigManager::instance();
@@ -989,10 +1030,10 @@ static int record_param_exit(void)
 		free(s_p_record_thd_param);
 	}
 
-	return OK;
+	return S_OK;
 }
 
-static int record_framelist_destroy(void)
+static S_Result record_framelist_destroy(void)
 {
 	FRAMELIST_S *framelist_node = NULL;
 	LIST_HEAD_S *pos, *next;
@@ -1016,11 +1057,11 @@ static int record_framelist_destroy(void)
 		s_framelist_info = NULL;
 	}
 
-	return 0;
+	return S_OK;
 }
 
 
-int record_thread_destroy(void)
+static S_Result record_thread_destroy(void)
 {
 	s_record_enable_flag = FALSE;
 	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
@@ -1046,21 +1087,17 @@ int record_thread_destroy(void)
 		s_p_record_thd_param->fpid = PID_NULL;
 	}
 
-	if (TRUE == s_sd_card_mount)
-	{
-		if (OK == storage_umount_sdcard(MOUNT_DIR))
-		{
-			s_sd_card_mount = FALSE;
-		}
-	}
 
 	record_framelist_destroy();
 
-	return OK;
+	return S_OK;
 }
 
-S_Result record_thread_cb(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
+static S_Result record_thread_cb(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
 {
+	S_Result S_ret = S_OK;
+	Json::Value reccfg;
+	ConfigManager& config = *ConfigManager::instance();
 	RECORD_USER_CONFIG_S oldcfg,newcfg;
 	memset(&newcfg, 0, sizeof(newcfg));
 	memset(&oldcfg, 0, sizeof(oldcfg));
@@ -1079,20 +1116,33 @@ S_Result record_thread_cb(void* clientData, const std::string name, const Json::
 			}
 			else
 			{
-				record_thread_start(newcfg);
+				if (S_ERROR == record_thread_start(newcfg))
+				{
+					config.getConfig("record.status.value", reccfg, response);
+					reccfg = s_rec_status[2];
+					config.setConfig("record.status.value", reccfg, response);
+					S_ret = S_ERROR;
+				}
 				break;
 			}
 		}
 		if ((newcfg.entype != oldcfg.entype) || (newcfg.record_mode != oldcfg.record_mode))
 		{
-			record_thread_restart(newcfg);
+			printf("restart record\n");
+			if (S_ERROR == record_thread_restart(newcfg))
+			{
+				config.getConfig("record.status.value", reccfg, response);
+				reccfg = s_rec_status[2];
+				config.setConfig("record.status.value", reccfg, response);
+				S_ret = S_ERROR;
+			}
 		}
 	} while (0);
 
-	return S_OK;
+	return S_ret;
 }
 
-S_Result record_thread_vd(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
+static S_Result record_thread_vd(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
 {
 	S_Result S_ret = S_OK;
 	S_ret = record_check_config(newConfig);
@@ -1104,58 +1154,113 @@ S_Result record_thread_vd(void* clientData, const std::string name, const Json::
 	return S_ret;
 }
 
-int record_register_validator()
+static S_Result record_register_validator()
 {
 	ConfigManager& config = *ConfigManager::instance();
 
 	config.registerValidator(RECORD_M, &record_thread_vd, (void *)1);
 
+	return S_OK;
+
 }
 
-int record_register_callback()
+static int record_register_callback()
 {
 	ConfigManager& config = *ConfigManager::instance();
 
 	config.registerCallback(RECORD_M, &record_thread_cb, (void *)1);
+
+	return S_OK;
 }
 
-int record_unregister_validator()
+static S_Result record_unregister_validator()
 {
 	ConfigManager& config = *ConfigManager::instance();
 
 	config.unregisterCallback(RECORD_M, &record_thread_vd, (void *)1);
+
+	return S_OK;
 }
 
-int record_unregister_callback()
+static S_Result record_unregister_callback()
 {
 	ConfigManager& config = *ConfigManager::instance();
 
 	config.unregisterCallback(RECORD_M, &record_thread_cb, (void *)1);
+
+	return S_OK;
 }
 
-int record_module_init(void)
+S_Result record_module_init(void)
 {
 	record_param_init();
 	record_register_validator();
 	record_register_callback();
 	record_thread_create();
 
-	return OK;
+	return S_OK;
 }
 
-int record_module_exit(void)
+S_Result record_module_exit(void)
 {
 	record_thread_destroy();
 	record_unregister_validator();
 	record_unregister_callback();
 	record_param_exit();
-	return OK;
+	return S_OK;
 }
+
+/*
+录像重启
+*/
+static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg)
+{
+	S_Result S_ret = S_OK;
+
+	pthread_mutex_lock(&s_p_record_thd_param->mutex);
+
+	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+	if (THD_STAT_START == s_p_record_thd_param->thd_stat)
+	{
+		s_p_record_thd_param->thd_stat = THD_STAT_STOP;
+		do
+		{
+			pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像停止之前不接受其他命令
+		}while(TRUE == s_p_record_thd_param->record_cond.wake); //等待wake置为false时退出
+
+		s_p_record_thd_param->delay_time = usercfg.delay_time;
+		s_p_record_thd_param->entype = usercfg.entype;
+		s_p_record_thd_param->record_mode = usercfg.record_mode;
+
+		if (THD_STAT_START != s_p_record_thd_param->thd_stat)
+		{
+			s_p_record_thd_param->thd_stat = THD_STAT_START;
+			pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);
+			do
+			{
+				pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像正常运行之前不接受其他命令
+				if (FALSE == s_p_record_thd_param->record_cond.wake_success)
+				{
+					s_p_record_thd_param->record_cond.wake_success = TRUE;//置为初始值
+					S_ret = S_ERROR;
+					break;//启动失败退出
+				}
+			}while(FALSE == s_p_record_thd_param->record_cond.wake);
+		}
+	}
+	pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
+
+	pthread_mutex_unlock(&s_p_record_thd_param->mutex);
+
+	return S_ret;
+}
+
+#if 0
 
 /*
 延时录像设置
 */
-int record_set_delay_time(int time)
+static int record_set_delay_time(int time)
 {
 	//todo
 	pthread_mutex_lock(&s_p_record_thd_param->mutex);
@@ -1167,16 +1272,17 @@ int record_set_delay_time(int time)
 /*
 分时录像设置
 */
-int record_set_divide_time(void)
+static int record_set_divide_time(void)
 {
 	//暂无需求
+	return OK;
 }
 
 
 /*
 录像模式设置
 */
-int record_set_record_mode(RECORD_MODE_E mode)
+static int record_set_record_mode(RECORD_MODE_E mode)
 {
 	if ((RECORD_MODE_SINGLE != mode) && (RECORD_MODE_MULTI != mode))
 	{
@@ -1231,51 +1337,9 @@ int record_set_record_mode(RECORD_MODE_E mode)
 
 
 /*
-录像重启
-*/
-void record_thread_restart(RECORD_USER_CONFIG_S usercfg)
-{
-
-	pthread_mutex_lock(&s_p_record_thd_param->mutex);
-
-	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
-	if (THD_STAT_START == s_p_record_thd_param->thd_stat)
-	{
-		s_p_record_thd_param->thd_stat = THD_STAT_STOP;
-		do
-		{
-			pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像停止之前不接受其他命令
-		}while(TRUE == s_p_record_thd_param->record_cond.wake); //等待wake置为false时退出
-
-		s_p_record_thd_param->delay_time = usercfg.delay_time;
-		s_p_record_thd_param->entype = usercfg.entype;
-		s_p_record_thd_param->record_mode = usercfg.record_mode;
-
-		if (THD_STAT_START != s_p_record_thd_param->thd_stat)
-		{
-			s_p_record_thd_param->thd_stat = THD_STAT_START;
-			pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);
-			do
-			{
-				pthread_cond_wait(&s_p_record_thd_param->record_cond.cond, &s_p_record_thd_param->record_cond.mutex);//确保在录像正常运行之前不接受其他命令
-				if (FALSE == s_p_record_thd_param->record_cond.wake_success)
-				{
-					s_p_record_thd_param->record_cond.wake_success = TRUE;//置为初始值
-					break;//启动失败退出
-				}
-			}while(FALSE == s_p_record_thd_param->record_cond.wake);
-		}
-	}
-	pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
-
-	pthread_mutex_unlock(&s_p_record_thd_param->mutex);
-}
-
-
-/*
 编码类型设置
 */
-int record_set_encode_type(CODEC_TYPE_E entype)
+static int record_set_encode_type(CODEC_TYPE_E entype)
 {
 	if ((CODEC_H264 != entype) && (CODEC_H265 != entype))
 	{
@@ -1327,3 +1391,4 @@ int record_set_encode_type(CODEC_TYPE_E entype)
 
 	return OK;
 }
+#endif

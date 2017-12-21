@@ -10,6 +10,7 @@
 static DIR *s_video_dir;
 static FILEINFO_S *s_fileinfo;
 
+int filelist_clear_up();
 
 /*
 	显示录像文件列表：
@@ -17,12 +18,10 @@ static FILEINFO_S *s_fileinfo;
 	2.全部显示
 	3.显示某天
 */
+
 int refresh_video_filelist()
 {
 	struct dirent *file;
-	FILELIST_S *filelist_node;
-	int filename_num_tmp = 0;
-	int filename_num_max = 0;
 
 	filelist_clear_up();
 	if (NULL == s_video_dir)
@@ -35,7 +34,6 @@ int refresh_video_filelist()
 		}
 	}
 	rewinddir(s_video_dir);
-	int i = 0;
 	while ((file = readdir(s_video_dir)) != NULL)
 	{
 		if ('.' != file->d_name[0]) //排除'.','..'和其他隐藏文件
@@ -118,7 +116,7 @@ int inset_video_by_name(char *filename)
 	if (1 == ret)
 	{
 		filelist_node = (FILELIST_S *)malloc(sizeof(FILELIST_S));
-		memset(filelist_node, 0, sizeof(filelist_node));
+		memset(filelist_node, 0, sizeof(FILELIST_S));
 		strncpy(filelist_node->filename, filename, FILE_NAME_LEN_MAX);
 		if (filename_num > filename_num_tmp)
 		{
@@ -136,7 +134,7 @@ int inset_video_by_name(char *filename)
 	}
 
 	return ret;
-	
+
 }
 
 /*
@@ -148,8 +146,8 @@ void search_video_by_name(char *filename)
 	LIST_HEAD_S *pos;
 	FILELIST_S *filelist_node = NULL;
 
-	list_for_each(pos, &s_fileinfo->listhead->list)   
-	{   
+	list_for_each(pos, &s_fileinfo->listhead->list)
+	{
 	    filelist_node = list_entry(pos, FILELIST_S, list);
 	    if (0 == strcmp(filelist_node->filename, filename))
 	    {
@@ -170,20 +168,21 @@ void search_video_by_time()
 
 /* 文件删除 */
 void delete_file_by_name(char **filename, int count)
-{	
+{
 	FILELIST_S *filelist_node = NULL;
 	LIST_HEAD_S *pos, *next;
 	int i = 0, remain = count;
-	char cmd[64] = {'\0'};
-	list_for_each_safe(pos, next, &s_fileinfo->listhead->list)  
-	{  
+	char file[64] = {'\0'};
+	list_for_each_safe(pos, next, &s_fileinfo->listhead->list)
+	{
 		filelist_node = list_entry(pos, FILELIST_S, list); //获取双链表结构体的地址
 		for (i = 0; i < count; i++)
 		{
 			if (0 == strcmp(filelist_node->filename, filename[i]))
 			{
-				sprintf(cmd, "rm %s/%s", VIDEO_DIR, filename[i]);
-				system(cmd);
+				sprintf(file, "rm %s/%s", VIDEO_DIR, filename[i]);
+				remove(file);
+				//system(cmd);
 				list_del_init(pos);
 				s_fileinfo->file_num--;
 				remain--;
@@ -202,8 +201,8 @@ void show_filelist()
 	LIST_HEAD_S *pos;
 	FILELIST_S *filelist_node = NULL;
 
-	list_for_each(pos, &s_fileinfo->listhead->list)   
-	{   
+	list_for_each(pos, &s_fileinfo->listhead->list)
+	{
 	    filelist_node = list_entry(pos, FILELIST_S, list);
 
 		printf("file %s\n", filelist_node->filename);
@@ -242,8 +241,8 @@ int filelist_clear_up()
 {
 	FILELIST_S *filelist_node = NULL;
 	LIST_HEAD_S *pos, *next;
-	list_for_each_safe(pos, next, &s_fileinfo->listhead->list)  
-	{  
+	list_for_each_safe(pos, next, &s_fileinfo->listhead->list)
+	{
 		filelist_node = list_entry(pos, FILELIST_S, list); //获取双链表结构体的地址
 		list_del_init(pos);
 		s_fileinfo->file_num--;

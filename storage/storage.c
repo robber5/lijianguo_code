@@ -1,13 +1,23 @@
-#include <unistd.h>  
+#include <unistd.h>
+#include <stdio.h>
 #include <string.h>
-#include <stdio.h>  
+#include <dirent.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+
+#include "storage.h"
+
+#if 0
+#include <unistd.h>
+#include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include <malloc.h>
 #include <stdlib.h>
-#include <sys/types.h>  
-#include <sys/stat.h>  
-#include <dirent.h>  
-#include <time.h>  
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <time.h>
 
 #include <sys/mount.h>
 
@@ -36,7 +46,7 @@
 #define FORMAT_SECTORS		64
 #define BUF_SIZE		(FORMAT_SECTORS * SECTOR_SIZE)
 
-#define BUFSIZE		(32 * 1024)	
+#define BUFSIZE		(32 * 1024)
 
 #define DEV_DIR	"/dev"
 
@@ -44,20 +54,20 @@
 #define SYSTEM_ID			"LINUX" /*≥ß…Ã±Íº«∫ÕOS  */
 #define KILO			1024
 
-#define MSDOS_EXT_SIGN		0x29	
+#define MSDOS_EXT_SIGN		0x29
 #define MSDOS_FAT12_SIGN	"FAT12   "
 #define MSDOS_FAT16_SIGN	"FAT16   "
 #define MSDOS_FAT32_SIGN	"FAT32   "
 
 
 /* attribute bits  ∏˘ƒø¬º Ù–‘*/
-#define ATTR_RO      1		
-#define ATTR_HIDDEN  2		
-#define ATTR_SYS     4		
-#define ATTR_VOLUME  8		
-#define ATTR_DIR     16		
-#define ATTR_ARCH    32		
-#define ATTR_NONE    0		
+#define ATTR_RO      1
+#define ATTR_HIDDEN  2
+#define ATTR_SYS     4
+#define ATTR_VOLUME  8
+#define ATTR_DIR     16
+#define ATTR_ARCH    32
+#define ATTR_NONE    0
 #define ATTR_UNUSED  (ATTR_VOLUME | ATTR_ARCH | ATTR_SYS | ATTR_HIDDEN)
 
 
@@ -107,7 +117,7 @@ typedef struct msdos_boot_sector_t
 {
 	Uint8_t	boot_jump[3];	/* Ã¯◊™÷∏¡Ó 3 */
 	Int8_t   system_id[8];	/* ≥ß…Ã±Í÷æOS∞Ê±æ∫≈ 8 * partition manager volumes */
-	
+
 	Uint8_t	sector_size[2];	/*  √ø…»«¯◊÷Ω⁄ ˝ 2*/
 	Uint8_t	cluster_size;		/*  √ø¥ÿ…»«¯ ˝ 1 */
 	Uint16_t	reserved;		/*  ±£¡Ù…»«¯ ˝ 2 (“ª∞„Œ™32) */
@@ -134,7 +144,7 @@ typedef struct msdos_boot_sector_t
 	} __attribute__ ((packed)) fat32;
 
 	Uint16_t	boot_sign;
-	
+
 } __attribute__ ((packed))msdos_boot_sector;
 
 
@@ -271,7 +281,7 @@ int storage_dev_info_init()
 			}
 			int major, minor, blocks;
 
-			sscanf(line, "%d %d %d", &major, &minor, &blocks);	
+			sscanf(line, "%d %d %d", &major, &minor, &blocks);
 
 			sdcard->capability = blocks;
 			sdcard->remain = blocks;
@@ -315,7 +325,7 @@ static int cal_free_clus(int fat_bits, int fat_rsv_sec, int sec_per_ftab)
 			perror("read");
 			return S_ERROR;
 		}
-		
+
 		for (i = 0; i < ret; i += fat_bits)
 		{
 			for (j = 0; j < fat_bits; j++)
@@ -333,10 +343,10 @@ static int cal_free_clus(int fat_bits, int fat_rsv_sec, int sec_per_ftab)
 	}
 
 	return free_clus;
-} 
+}
 
 /******************************************************************************
- * ∫Ø ˝√˚≥∆:	fat_get_free	
+ * ∫Ø ˝√˚≥∆:	fat_get_free
  * ∫Ø ˝√Ë ˆ:	º∆À„fat∏Ò Ωµƒ £”‡ø’º‰,KBµ•Œª.
  *  ‰    »Î: 	Œﬁ
  *  ‰    ≥ˆ: 	Œﬁ
@@ -369,7 +379,7 @@ static int fat_get_free(void)
 
 		free_clus = cal_free_clus(fat_bits, fat_rsv_sec, sec_per_ftab);
 	}
-	else	
+	else
 	{
 		fat_boot_fsinfo *pfinfo;
 
@@ -378,7 +388,7 @@ static int fat_get_free(void)
 		{
 			free_clus = pfinfo->free_clusters;
 		}
-		else			
+		else
 		{
 			fat_bits = 4;
 			sec_per_ftab = pbs->fat32.fat32_length;
@@ -389,8 +399,8 @@ static int fat_get_free(void)
 
 	free_size = (free_clus * sec_per_clu)/2;
 	return free_size;
-	
-} 
+
+}
 
 /*
 	Ëé∑ÂèñsdÂç°Ââ©‰ΩôÂÆπÈáè
@@ -398,7 +408,7 @@ static int fat_get_free(void)
 
 int storage_get_free_space()
 {
-	SD_CARD_INFO_S *sd_card;	
+	SD_CARD_INFO_S *sd_card;
 
 
 		sd_card = &s_sd_card;
@@ -406,10 +416,10 @@ int storage_get_free_space()
 		{
 			return 0;
 		}
-		
+
 		sd_card->remain = fat_get_free();
-		
-		storage_sdcard_dev_release();		
+
+		storage_sdcard_dev_release();
 
 	return sd_card->remain;
 
@@ -417,10 +427,10 @@ int storage_get_free_space()
 
 static void fat_set_type(int total_sect)
 {
-	int tcap = total_sect / 2; 
+	int tcap = total_sect / 2;
 	int fat_bits;
 
-	if (tcap < (2 * KILO * KILO)) 
+	if (tcap < (2 * KILO * KILO))
 	{
 		s_format.fat32_type = 0;
 		fat_bits = 2;
@@ -454,7 +464,7 @@ static void fat_set_type(int total_sect)
 			s_format.sec_per_clus = 64;
 		}
 	}
-	else   
+	else
 	{
 		s_format.fat32_type = 1;
 		fat_bits = 4;
@@ -475,24 +485,24 @@ static void fat_set_type(int total_sect)
 		{
 			s_format.sec_per_clus = 64;
 		}
-	} 
-	
+	}
+
 	 /* fab±ÌÀ˘–Ë…»«¯ ˝=   (◊‹…»«¯ ˝/√ø¥ÿ…»«¯ ˝)* ±Ì æ√ø¥ÿÀ˘–Ë◊÷Ω⁄ ˝/512 */
 	s_format.sec_per_ftable = (total_sect * fat_bits) / (s_format.sec_per_clus * SECTOR_SIZE);
 	if ((total_sect * fat_bits) % (s_format.sec_per_clus * SECTOR_SIZE) != 0)
 	{
 		s_format.sec_per_ftable++;
 	}
-} 
+}
 
 /******************************************************************************
  * ∫Ø ˝√˚≥∆:	fatboot_format
  * ∫Ø ˝√Ë ˆ:	∏Ò ΩªØ“˝µº…»«¯ ,∞¥’’“˝µº…»«¯µƒ∂®“ÂΩ¯––∏≥÷µ
  *  ‰    »Î: 	◊‹…»«¯ ˝
- *  ‰    ≥ˆ: 	
+ *  ‰    ≥ˆ:
  * ∑µ ªÿ ÷µ: 	◊¥Ã¨
  ******************************************************************************/
-static int fboot_format(int total_sect) 
+static int fboot_format(int total_sect)
 {
 	msdos_boot_sector *pbs;
 	Uint8_t	dummy_boot_jump[3] = {0xEB, 0x58, 0x90};/*fat32∞◊∆§ Èœ‘ æ-- EB 58 90 */
@@ -503,7 +513,7 @@ static int fboot_format(int total_sect)
 	pbs = (msdos_boot_sector *)s_fatbuf;
 
 	memcpy(pbs->boot_jump, dummy_boot_jump, 3);
-	strncpy(pbs->system_id, SYSTEM_ID, 8); 
+	strncpy(pbs->system_id, SYSTEM_ID, 8);
 
 	pbs->sector_size[0] = (SECTOR_SIZE & 0xff);
 	pbs->sector_size[1] = ((SECTOR_SIZE >> 8) & 0xff);
@@ -526,14 +536,14 @@ static int fboot_format(int total_sect)
 	{
 		pbs->dir_entries[0] = 0;
 		pbs->dir_entries[1] = 0;
-		pbs->sectors[0] = 0;//xjw 
+		pbs->sectors[0] = 0;//xjw
 		pbs->sectors[1] = 0;
 	}
 	else
 	{
 		pbs->dir_entries[0] = 0;	/* FAT12∫ÕFAT16 ƒ¨»œ=512*/
 		pbs->dir_entries[1] = 2;
-		
+
 		pbs->sectors[0] = (total_sect&0xFF);/* fat16 ◊‹…»«¯ ˝*/
 		pbs->sectors[1] =  ((total_sect >> 8)&0xFF);
 
@@ -543,13 +553,13 @@ static int fboot_format(int total_sect)
 
 	if (s_format.fat32_type)
 	{
-		pbs->fat_length = 0;		
+		pbs->fat_length = 0;
 	}
 	else
 	{
 		pbs->fat_length = (Uint16_t)s_format.sec_per_ftable;/* fat12/fat16 “ª∏ˆfat±Ì’ºµƒ…»«¯ ˝-xjw */
 	}
-	
+
 	/*
 	◊‹…»«¯ ˝= ÷˘√Ê ˝* ¥≈Õ∑ ˝* √ø¥≈µ¿µƒ…»«¯ ˝
 	struct hd_geometry
@@ -683,7 +693,7 @@ static int ftable_format(void)
 	memset(s_fatbuf, 0, BUF_SIZE);
 
 	if (s_format.fat32_type)
-	{				
+	{
 		s_fatbuf[0]	= 0xf8;
 		s_fatbuf[1]	= 0xff;
 		s_fatbuf[2]	= 0xff;
@@ -709,7 +719,7 @@ static int ftable_format(void)
 
 	fprintf(stderr, "Formating ...\n");
 	buf_flag = 0;
-	
+
 	for (left = s_format.sec_per_ftable; left > 0; left -= FORMAT_SECTORS)
 	{
 		once = (left > FORMAT_SECTORS) ? FORMAT_SECTORS : left;
@@ -749,14 +759,14 @@ static int ftable_format(void)
 		}
 
 		sect_off += once;
-	} 
+	}
 
 	return S_OK;
 }
 
 /******************************************************************************
  * ∫Ø ˝√˚≥∆:	froot_format
- * ∫Ø ˝√Ë ˆ:	∏˘ƒø¬º Œƒº˛ƒø¬ºœÓ«Â¡„.÷ª∏Ò ΩªØ¡ÀæÌ±Í–≈œ¢ 					
+ * ∫Ø ˝√Ë ˆ:	∏˘ƒø¬º Œƒº˛ƒø¬ºœÓ«Â¡„.÷ª∏Ò ΩªØ¡ÀæÌ±Í–≈œ¢
  *  ‰    »Î: 	Œﬁ
  *  ‰    ≥ˆ: 	∏Ò ΩªØ∫Ûµƒfat±Ì
  * ∑µ ªÿ ÷µ: 	◊¥Ã¨
@@ -770,11 +780,11 @@ static int froot_format(void)
 
 	if (s_format.fat32_type)
 	{
-		root_sectors = s_format.sec_per_clus;	
+		root_sectors = s_format.sec_per_clus;
 	}
 	else
 	{
-		root_sectors = 32;			
+		root_sectors = 32;
 	}
 
 	memset(s_fatbuf, 0, BUF_SIZE);
@@ -869,7 +879,7 @@ int storage_format_sdcard(char *devname)
 			goto out;
 		}
 
-		ret = total_sect / 2;	
+		ret = total_sect / 2;
 
 	out:
 		storage_sdcard_dev_release();
@@ -879,40 +889,270 @@ int storage_format_sdcard(char *devname)
 
 
 }
+#endif
 
-int storage_mount_sdcard(char *mountpoint, char *devname)
+#define DIR_COUNT 5
+
+static const char rec_dir[DIR_COUNT][8] = {AVS_VIDEO_DIR, CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR};
+
+
+/*
+
+ÂùóËÆæÂ§áÊñá‰ª∂Ê£ÄÊµãÔºö
+
+*/
+
+static S_Result storage_sdcard_dev_block_check(void)
 {
+	S_Result S_ret = S_ERROR;
+	char line[64], tmp[16];
+	char *blkname = NULL;
+	FILE *fp;
+
+	if (NULL == (fp = fopen("/proc/partitions", "r")))
+	{
+		fprintf(stderr, "open /proc/partitions fail\n");
+		return S_ret;
+	}
+
+	strncpy(tmp, "mmcblk1p1", sizeof(tmp));
+	while (fgets(line, sizeof(line), fp))
+	{
+		blkname = strstr(line, tmp);
+		if (NULL != blkname)
+		{
+			S_ret = S_OK;
+			break;
+		}
+
+	}
+
+	fclose(fp);
+
+	return S_ret;
+}
+
+/*
+
+ËÆæÂ§áÊåÇËΩΩÊ£ÄÊµã
+
+*/
+
+static S_Result storage_sdcard_mount_check(void)
+{
+	S_Result S_ret = S_ERROR;
+	FILE *fp;
+	char line[128], tmp[16];
+	char *blkname = NULL;
+
+	if (NULL == (fp = popen("df -h", "r")))
+	{
+		perror("popen:");
+		return S_ret;
+	}
+
+	strncpy(tmp, DEV_NAME, sizeof(tmp));
+
+	while (fgets(line, 128, fp) != NULL)
+	{
+	    blkname = strstr(line, tmp);
+		if (NULL != blkname)
+		{
+			S_ret = S_OK;
+			break;
+		}
+	}
+
+	pclose(fp);
+
+	return S_ret;
+
+}
+
+/*
+
+Êñá‰ª∂ÁõÆÂΩïÊ£ÄÊµã
+
+*/
+
+static S_Result storage_sdcard_dir_check(void)
+{
+	S_Result S_ret = S_ERROR;
+	DIR *sdcard_dir = NULL;
+	struct dirent *file;
+	char recdir[24];
+
+	int flag = 0;
+	int i = 0;
+	do
+	{
+		if ((sdcard_dir = opendir(MOUNT_DIR)) == NULL)
+		{
+			perror("opendir sdcard_dir");
+			printf("get_video_filelist failed\n");
+			break;
+		}
+		rewinddir(sdcard_dir);
+
+		while ((file = readdir(sdcard_dir)) != NULL)
+		{
+			if ('.' != file->d_name[0]) //ÊéíÈô§'.','..'ÂíåÂÖ∂‰ªñÈöêËóèÊñá‰ª∂
+			{
+				for (i = 0; i < DIR_COUNT; i++)
+				{
+					if (!strcmp(rec_dir[i], file->d_name))
+					{
+						printf("find dir:%s\n", file->d_name);
+						flag += 1 << i;
+					}
+				}
+			}
+		}
+
+		for (i = 0; i < DIR_COUNT; i++)
+		{
+			if (!(flag & (1 << i)))
+			{
+				printf("make dir :%s", rec_dir[i]);
+				snprintf(recdir, 24, "%s%s", MOUNT_DIR, rec_dir[i]);
+				if(-1 == mkdir(recdir, 0755))
+				{
+					perror("mkdir:");
+					printf("make dir :%s", recdir);
+					break;
+				}
+			}
+		}
+		if (DIR_COUNT > i)
+		{
+			break;//Âá∫ÈîôÈÄÄÂá∫
+		}
+
+		if (closedir(sdcard_dir))
+		{
+			perror("closedir sdcard_dir");
+			break;
+		}
+		S_ret = S_OK;
+	}while (0);
+
+	return S_ret;
+}
+
+/*
+
+sdÂç°Ê£ÄÊµã
+
+*/
+S_Result storage_sdcard_check(void)
+{
+	S_Result S_ret = S_ERROR;
+
+	do
+	{
+		S_ret = storage_sdcard_dev_block_check();
+		if (S_ERROR == S_ret)
+		{
+			printf("no sd_card!\n");
+			break;
+		}
+		S_ret = storage_sdcard_mount_check();
+		if (S_ERROR == S_ret)
+		{
+			printf("sd_card has not been mounted\n");
+			S_ret = storage_sdcard_mount();
+			if (S_ERROR == S_ret)
+			{
+				printf("sd_card need to be formated\n");
+				break;
+			}
+		}
+		S_ret = storage_sdcard_dir_check();
+		if (S_ERROR == S_ret)
+		{
+			printf("sd_card mkdir error\n");
+			break;
+		}
+		S_ret = S_OK;
+	}while (0);
+
+	return S_ret;
+
+
+}
+
+S_Result storage_sdcard_format(void)
+{
+	S_Result S_ret = S_ERROR;
+
+	FILE *fp;
+	char line[128];
+
+	char cmd[64]= {'\0'};
+
+	snprintf(cmd, 64, "%s %s", "mkfs.vfat", DEV_NAME);
+
+	if (NULL != (fp = popen(cmd, "r")))
+	{
+		S_ret = S_OK;
+		pclose(fp);
+	}
+	else
+	{
+		perror("popen:");
+	}
+
+	return S_ret;
+}
+
+S_Result storage_sdcard_mount(void)
+{
+	S_Result S_ret = S_ERROR;
 	char *fstype = "vfat";
 	unsigned long  mountflg = 0;
 	mountflg = MS_MGC_VAL;
 
-	umount(mountpoint);
-
-	printf("mount -t %s %s %s\n", fstype, devname, mountpoint);
-
-	if (mount(devname, mountpoint, fstype, mountflg, 0) == -1)
+	do
 	{
-		perror("mount");
-		fprintf(stderr, "try once.\n");
-		return mount(devname, mountpoint, fstype, mountflg, 0);
-	}
+		umount(MOUNT_DIR);
 
-	return S_OK;
+		if (-1 == mount(DEV_NAME, MOUNT_DIR, fstype, mountflg, 0))
+		{
+			perror("mount");
+			fprintf(stderr, "try once.\n");
+			sleep(2);
+			if (-1 == mount(DEV_NAME, MOUNT_DIR, fstype, mountflg, 0))
+			{
+				break;
+			}
+		}
+		S_ret = S_OK;
+	} while (0);
+
+	return S_ret;
 }
 
 
-int storage_umount_sdcard(char *mountpoint)
+S_Result storage_sdcard_umount(void)
 {
-	printf("\numount sd card!!!!\n");
-	sync();
-	umount(mountpoint);
-	if (umount(mountpoint) == -1)
+	S_Result S_ret = S_ERROR;
+
+	do
 	{
-		perror("umount");
-		fprintf(stderr, "try once.\n");
-		sleep(2);
-		return umount(mountpoint);
-	}
+		sync();
+		umount(MOUNT_DIR);
+		if (-1 == umount(MOUNT_DIR))
+		{
+			perror("umount");
+			fprintf(stderr, "try once.\n");
+			sleep(2);
+			if (-1 == umount(MOUNT_DIR))
+			{
+				break;
+			}
+		}
+		S_ret = S_OK;
+	}while (0);
 
 	return S_OK;
 }
