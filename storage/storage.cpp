@@ -1073,6 +1073,7 @@ S_Result storage_sdcard_check(void)
 			printf("sd_card mkdir error\n");
 			break;
 		}
+
 		S_ret = S_OK;
 	}while (0);
 
@@ -1086,7 +1087,6 @@ S_Result storage_sdcard_format(void)
 	S_Result S_ret = S_ERROR;
 
 	FILE *fp;
-	char line[128];
 
 	char cmd[64]= {'\0'};
 
@@ -1108,7 +1108,7 @@ S_Result storage_sdcard_format(void)
 S_Result storage_sdcard_mount(void)
 {
 	S_Result S_ret = S_ERROR;
-	char *fstype = "vfat";
+	char *fstype =(char *)"vfat";
 	unsigned long  mountflg = 0;
 	mountflg = MS_MGC_VAL;
 
@@ -1140,6 +1140,7 @@ S_Result storage_sdcard_umount(void)
 	do
 	{
 		sync();
+		sleep(2);
 		umount(MOUNT_DIR);
 		if (-1 == umount(MOUNT_DIR))
 		{
@@ -1154,5 +1155,27 @@ S_Result storage_sdcard_umount(void)
 		S_ret = S_OK;
 	}while (0);
 
+	return S_ret;
+}
+
+S_Result storage_create_monitor_thread(void);
+S_Result storage_destroy_monitor_thread(void);
+
+S_Result storage_module_init(void)
+{
+
+	storage_create_monitor_thread();
+
+	return S_OK;
+
+}
+
+
+S_Result storage_module_exit(void)
+{
+
+	storage_destroy_monitor_thread();
+
 	return S_OK;
 }
+

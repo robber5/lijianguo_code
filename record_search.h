@@ -1,6 +1,7 @@
 #ifndef RECORD_SEARCH_MODULE_
 #define RECORD_SEARCH_MODULE_
 
+#include "storage.h"
 #ifdef __cplusplus
 #if __cplusplus
 extern "C"
@@ -9,7 +10,6 @@ extern "C"
 #endif
 
 #include "record_list.h"
-#include "storage.h"
 
 #define FILE_NAME_LEN_MAX 128
 

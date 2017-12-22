@@ -1,13 +1,6 @@
 #ifndef _STORAGE_MODULE_H_
 #define _STORAGE_MODULE_H_
 
-#ifdef __cplusplus
-#if __cplusplus
-extern "C"
-{
-#endif
-#endif
-
 #include "defs.h"
 
 #define _LARGEFILE_SOURCE		1
@@ -27,11 +20,9 @@ extern "C"
 
 #define BAK_DEBUG(format, args...)	printf("%s, %dL: "format, __FUNCTION__, __LINE__, ##args)
 
-
-
-
-
-
+#ifdef __cplusplus
+//extern "C" {
+#endif
 
 
 /*
@@ -39,17 +30,20 @@ extern "C"
 */
 
 
-int storage_sdcard_mount(void);
+S_Result storage_sdcard_mount(void);
 
-int storage_sdcard_umount(void);
+S_Result storage_sdcard_umount(void);
 
 S_Result storage_sdcard_check(void);
 
+S_Result storage_module_init(void);
+
+S_Result storage_module_exit(void);
+
 
 #ifdef __cplusplus
-}
-#endif  /* #endif __cplusplus */
-
+//}
+#endif
 
 #endif  /* _CAL_H_ */
 

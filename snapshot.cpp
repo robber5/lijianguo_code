@@ -576,13 +576,19 @@ static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg)
 
 static S_Result snapshot_thread_stop()
 {
+	Json::Value snapcfg,response;
+	ConfigManager& config = *ConfigManager::instance();
+
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
 
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 	if (THD_STAT_START == p_gs_snapshot_thd_param->thd_stat)
 	{
 		p_gs_snapshot_thd_param->thd_stat = THD_STAT_STOP;
+		p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_IDLE;
 
+		config.getDefault("snapshot.snapshot_mode.value", snapcfg, response);
+		config.setConfig("snapshot.snapshot_mode.value", snapcfg, response);
 		do
 		{
 			pthread_cond_wait(&p_gs_snapshot_thd_param->snapshot_cond.cond, &p_gs_snapshot_thd_param->snapshot_cond.mutex);
