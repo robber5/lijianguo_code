@@ -17,6 +17,8 @@
 #define CH2_VIDEO_DIR "chn2"
 #define CH3_VIDEO_DIR "chn3"
 #define AVS_VIDEO_DIR "avs"
+#define AVS_1080P "avs1080P"
+#define ALLCHN "allchn"
 
 #define BAK_DEBUG(format, args...)	printf("%s, %dL: "format, __FUNCTION__, __LINE__, ##args)
 

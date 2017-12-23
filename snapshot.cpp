@@ -105,11 +105,13 @@ static p_snapshot_thread_params_s p_gs_snapshot_thd_param;
 #define SNAPSHOT_MODE "snapshot_mode"
 
 #define CHN_COUNT 6
+#define CHN_NUM_MAX 7
+
 #define PACKET_SIZE_MAX (10*1024*1024)
 
 static char s_snapshot_status[THD_STAT_MAX][16] = {"idle", "start", "stop", "quit"};
 static char s_snapshot_mode[SNAPSHOT_MODE_MAX][16] = {"idle", "single", "series"};
-static char s_snapshot_chn[CHN_COUNT][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
+static char s_snapshot_chn[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_1080P, ALLCHN};
 
 static char s_picture_dir[CHN_COUNT][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
 
@@ -139,6 +141,19 @@ static S_Result record_get_jpeg_filename(char *filename, int index)
 	return S_OK;
 }
 
+static int get_max_fd(int *fd, int num)
+{
+	int i, fd_max = -1;
+	for (i = 0; i < num; i++)
+	{
+		if (fd[i] >= fd_max)
+		{
+			fd_max = fd[i];
+		}
+	}
+
+	return fd_max;
+}
 
 static void *snapshot_thread(void *p)
 {
@@ -149,11 +164,15 @@ static void *snapshot_thread(void *p)
 	Uint8_t *packet = NULL;
 	Uint32_t packetSize = PACKET_SIZE_MAX;
 	Uint64_t pts;
-	Uint32_t chn = p_gs_snapshot_thd_param->chn;
+	int fd[CHN_COUNT];
+	Uint32_t chn[CHN_COUNT];
+	Uint32_t chnnum = 0;
+	Uint32_t curchn = 0;
 	Uint32_t seq = 0u;
 	char filename[FILE_NAME_LEN_MAX];
-	int fd;
 	FILE *fp = NULL;
+	Uint32_t remain_chn_num = 0, i = 0;
+	int fd_max = -1;
 
 	packet = (Uint8_t *)malloc(PACKET_SIZE_MAX*sizeof(Uint8_t));
 	memset(packet, 0, PACKET_SIZE_MAX);
@@ -187,11 +206,31 @@ static void *snapshot_thread(void *p)
 		}
 
 		sleep(p_gs_snapshot_thd_param->delay_time);
-		chn = p_gs_snapshot_thd_param->chn;
-		videoEncoder.startRecvStream(chn);
-		videoEncoder.getFd(chn, fd);
-		FD_ZERO(&inputs);
-		FD_SET(fd,&inputs);
+		chnnum = p_gs_snapshot_thd_param->chn;
+		if (CHN_COUNT > chnnum)
+		{
+			chn[0] = chnnum;
+			videoEncoder.startRecvStream(chn[0]);
+			videoEncoder.getFd(chn[0], fd[0]);
+			FD_ZERO(&inputs);
+			FD_SET(fd[0],&inputs);
+			remain_chn_num = 1;
+			fd_max = fd[0];
+		}
+		else
+		{
+			FD_ZERO(&inputs);
+			for (i = 0; i < CHN_COUNT; i++)
+			{
+				chn[i] = i;
+				videoEncoder.startRecvStream(chn[i]);
+				videoEncoder.getFd(chn[i], fd[i]);
+				FD_SET(fd[i],&inputs);
+			}
+			remain_chn_num = CHN_COUNT;
+			fd_max = get_max_fd(fd, CHN_COUNT);
+			printf("start allchn\n");
+		}
 
 		pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 		if (FALSE == p_gs_snapshot_thd_param->snapshot_cond.wake)
@@ -207,7 +246,7 @@ static void *snapshot_thread(void *p)
 			timeout.tv_usec = 500000;
 			testfds = inputs;
 			packetSize = PACKET_SIZE_MAX;
-			result = select(fd + 1, &testfds, NULL, NULL, &timeout);
+			result = select(fd_max + 1, &testfds, NULL, NULL, &timeout);
 			switch (result)
 			{
 				case 0:
@@ -217,11 +256,22 @@ static void *snapshot_thread(void *p)
 					perror("select");
 					break;
 				default:
-
-					videoEncoder.getStream(chn, seq, packet, packetSize, pts);
+					for (i = 0; i < CHN_COUNT; i++)
+					{
+						if (FD_ISSET(fd[i],&testfds))
+						{
+							curchn = chn[i];
+							break;
+						}
+					}
+					videoEncoder.getStream(curchn, seq, packet, packetSize, pts);
 					break;
 			}
-			record_get_jpeg_filename(filename, chn);
+			if(CHN_COUNT <= i)
+			{
+				continue;
+			}
+			record_get_jpeg_filename(filename, curchn);
 			if (SNAPSHOT_MODE_SINGLE == p_gs_snapshot_thd_param->snapshot_mode)
 			{
 				//todo 写入sd卡
@@ -231,17 +281,24 @@ static void *snapshot_thread(void *p)
 				    break;
 				}
 				fwrite(packet, sizeof(char), packetSize, fp);
+				printf("remain chn:%d\n", remain_chn_num);
 				printf("create file:%s\n", filename);
 				fflush(fp);
 				fclose(fp);
-				p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_IDLE;
-				pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
-				if (FALSE == p_gs_snapshot_thd_param->snapshot_cond.idle)
+				FD_CLR(fd[i],&inputs);
+				//videoEncoder.stopRecvStream(chn[i]);
+				if (0 == (--remain_chn_num))
 				{
-					p_gs_snapshot_thd_param->snapshot_cond.idle = TRUE;
-					pthread_cond_broadcast(&p_gs_snapshot_thd_param->snapshot_cond.cond);//通知拍照命令执行完成
+					printf("remain chn:%d\n", remain_chn_num);
+					p_gs_snapshot_thd_param->snapshot_mode = SNAPSHOT_MODE_IDLE;
+					pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
+					if (FALSE == p_gs_snapshot_thd_param->snapshot_cond.idle)
+					{
+						p_gs_snapshot_thd_param->snapshot_cond.idle = TRUE;
+						pthread_cond_broadcast(&p_gs_snapshot_thd_param->snapshot_cond.cond);//通知拍照命令执行完成
+					}
+					pthread_mutex_unlock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 				}
-				pthread_mutex_unlock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 			}
 			else if (SNAPSHOT_MODE_SERIES == p_gs_snapshot_thd_param->snapshot_mode)
 			{
@@ -251,7 +308,10 @@ static void *snapshot_thread(void *p)
 			else
 			{
 				//p_gs_snapshot_thd_param->thd_stat = THD_STAT_STOP;
-				s_pic_count++;
+				if (FD_ISSET(fd[0],&testfds) && (PIC_COUNT_MIN > s_pic_count))
+				{
+					s_pic_count++;
+				}
 				continue;
 			}
 		}
@@ -259,8 +319,6 @@ static void *snapshot_thread(void *p)
 		{
 			s_pic_count = 0;
 			//todo 退出处理
-			videoEncoder.stopRecvStream(chn);
-
 			pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 			if (TRUE == p_gs_snapshot_thd_param->snapshot_cond.wake)
 			{
@@ -289,7 +347,7 @@ static S_Result snapshot_trans_config(const Json::Value& config,SNAPSHOT_USER_CO
 			break;
 		}
 	}
-	for (i = 0; i < CHN_COUNT; i++)
+	for (i = 0; i < CHN_NUM_MAX; i++)
 	{
 		if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
 		{
@@ -334,14 +392,14 @@ static S_Result snapshot_check_config(const Json::Value& config)
 			printf("status error\n");
 			break;
 		}
-		for (i = 0; i < CHN_COUNT; i++)
+		for (i = 0; i < CHN_NUM_MAX; i++)
 		{
 			if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
 			{
 				break;
 			}
 		}
-		if (CHN_COUNT == i)
+		if (CHN_NUM_MAX == i)
 		{
 			S_ret = S_ERROR;
 			printf("chn error\n");
