@@ -81,7 +81,6 @@ typedef enum
 
 typedef enum
 {
-	THD_STAT_IDLE,
 	THD_STAT_START,
 	THD_STAT_STOP,
 	THD_STAT_QUIT,
@@ -163,7 +162,7 @@ typedef struct listinfo_s
 } LISTINFO_S;
 
 
-static char s_rec_status[THD_STAT_MAX][16] = {"idle", "start", "stop", "quit"};
+static char s_rec_status[THD_STAT_MAX][16] = {"start", "stop", "quit"};
 static char s_rec_mode[RECORD_MODE_MAX][16] = {"avs", "separate"};
 static char s_video_entype[CODEC_MAX][16] = {"H264", "H265"};
 
@@ -816,7 +815,6 @@ static S_Result record_thread_create(void)
 		return S_ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->fpid, "recf\0");
-	s_p_record_thd_param->thd_stat = THD_STAT_IDLE;
 
 	return S_OK;
 
@@ -982,10 +980,15 @@ static S_Result record_check_config(const Json::Value& config)
 static S_Result record_param_init(void)
 {
 	ConfigManager& config = *ConfigManager::instance();
+	const bool toSave = false;
 
 	Json::Value recCfg, response;
 
 	RECORD_USER_CONFIG_S usercfg;
+
+	config.getConfig("record.status.value", recCfg, response);
+	recCfg = "stop";
+	config.setConfig("record.status.value", recCfg, response, toSave);
 
 	config.getConfig(RECORD_M, recCfg, response);
 
@@ -1017,11 +1020,6 @@ static S_Result record_param_init(void)
 
 static S_Result record_param_exit(void)
 {
-	Json::Value reccfg,response;
-	ConfigManager& config = *ConfigManager::instance();
-
-	config.getDefault("record.status.value", reccfg, response);
-	config.setConfig("record.status.value", reccfg, response);
 
 	record_cond_deinit(&s_p_record_thd_param->record_cond);
 	pthread_mutex_destroy(&s_p_record_thd_param->mutex);
@@ -1093,12 +1091,14 @@ static S_Result record_thread_destroy(void)
 	return S_OK;
 }
 
-static S_Result record_thread_cb(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
+static S_Result record_thread_cb(const void* clientData, const std::string& name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
 {
 	S_Result S_ret = S_OK;
 	Json::Value reccfg;
 	ConfigManager& config = *ConfigManager::instance();
 	RECORD_USER_CONFIG_S oldcfg,newcfg;
+	const bool toSave = false;
+
 	memset(&newcfg, 0, sizeof(newcfg));
 	memset(&oldcfg, 0, sizeof(oldcfg));
 
@@ -1119,8 +1119,8 @@ static S_Result record_thread_cb(void* clientData, const std::string name, const
 				if (S_ERROR == record_thread_start(newcfg))
 				{
 					config.getConfig("record.status.value", reccfg, response);
-					reccfg = s_rec_status[2];
-					config.setConfig("record.status.value", reccfg, response);
+					reccfg = "stop";
+					config.setConfig("record.status.value", reccfg, response, toSave);
 					S_ret = S_ERROR;
 				}
 				break;
@@ -1132,8 +1132,8 @@ static S_Result record_thread_cb(void* clientData, const std::string name, const
 			if (S_ERROR == record_thread_restart(newcfg))
 			{
 				config.getConfig("record.status.value", reccfg, response);
-				reccfg = s_rec_status[2];
-				config.setConfig("record.status.value", reccfg, response);
+				reccfg = "stop";
+				config.setConfig("record.status.value", reccfg, response, toSave);
 				S_ret = S_ERROR;
 			}
 		}
@@ -1142,7 +1142,7 @@ static S_Result record_thread_cb(void* clientData, const std::string name, const
 	return S_ret;
 }
 
-static S_Result record_thread_vd(void* clientData, const std::string name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
+static S_Result record_thread_vd(const void* clientData, const std::string& name, const Json::Value& oldConfig, const Json::Value& newConfig, Json::Value& response)
 {
 	S_Result S_ret = S_OK;
 	S_ret = record_check_config(newConfig);

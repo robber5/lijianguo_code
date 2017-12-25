@@ -17,7 +17,6 @@
 #define REMOVE "remove@"
 #define ADD "add@"
 
-static int s_sdcard_status = -1;//0:add,1:remove,-1:initial value
 static pthread_t s_pid = -1;
 
 
@@ -28,12 +27,14 @@ void *storage_sdcard_monitor(void *arg)
 	Json::Value reccfg, snapcfg, response;
 	ConfigManager& config = *ConfigManager::instance();
 
+	int sdcard_status = -1;//0:add,1:remove,-1:initial value
     int sockfd;
     struct sockaddr_nl sa;
     int len;
     char buf[4096];
     struct iovec iov;
     struct msghdr msg;
+	const bool toSave = false;
 //	int i;
 
     memset(&sa,0,sizeof(sa));
@@ -75,26 +76,26 @@ void *storage_sdcard_monitor(void *arg)
 */
 		if (NULL != strstr(buf, BLK_NAME))
 		{
-			if ((NULL != strstr(buf, ADD)) && (0 != s_sdcard_status))
+			if ((NULL != strstr(buf, ADD)) && (0 != sdcard_status))
 			{
-				s_sdcard_status = 0;
+				sdcard_status = 0;
 				printf("insert the sd_card\n");
 			}
-			else if ((NULL != strstr(buf, REMOVE)) && ( 1 != s_sdcard_status))
+			else if ((NULL != strstr(buf, REMOVE)) && ( 1 != sdcard_status))
 			{
-				s_sdcard_status = 1;
+				sdcard_status = 1;
 				config.getConfig("record.status.value", reccfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					reccfg = "stop";
-					config.setConfig("record.status.value", reccfg, response);
+					config.setConfig("record.status.value", reccfg, response, toSave);
 					storage_sdcard_umount();
 				}
 				config.getConfig("snapshot.status.value", snapcfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					snapcfg = "stop";
-					config.setConfig("snapshot.status.value", snapcfg, response);
+					config.setConfig("snapshot.status.value", snapcfg, response, toSave);
 					storage_sdcard_umount();
 				}
 				printf("remove the sd_card\n");
