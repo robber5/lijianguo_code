@@ -166,6 +166,7 @@ static void *snapshot_thread(void *p)
 	FILE *fp = NULL;
 	Uint32_t remain_chn_num = 0, i = 0, j = 0;
 	int fd_max = -1;
+	int chn_status[CHN_COUNT] = {0};//0:stop,1:start
 
 	packet = (Uint8_t *)malloc(PACKET_SIZE_MAX*sizeof(Uint8_t));
 	memset(packet, 0, PACKET_SIZE_MAX);
@@ -209,6 +210,7 @@ static void *snapshot_thread(void *p)
 			FD_SET(fd[0],&inputs);
 			remain_chn_num = 1;
 			fd_max = fd[0];
+			chn_status[0] = 1;
 		}
 		else
 		{
@@ -219,6 +221,7 @@ static void *snapshot_thread(void *p)
 				videoEncoder.startRecvStream(chn[i]);
 				videoEncoder.getFd(chn[i], fd[i]);
 				FD_SET(fd[i],&inputs);
+				chn_status[i] = 1;
 			}
 			remain_chn_num = CHN_COUNT;
 			fd_max = get_max_fd(fd, CHN_COUNT);
@@ -268,6 +271,10 @@ static void *snapshot_thread(void *p)
 							}
 							continue;
 						}
+						else if (0 == chn_status[curchn])
+						{
+							continue;
+						}
 						record_get_jpeg_filename(filename, curchn);
 						if (SNAPSHOT_MODE_SINGLE == p_gs_snapshot_thd_param->snapshot_mode)
 						{
@@ -282,9 +289,11 @@ static void *snapshot_thread(void *p)
 							printf("create file:%s\n", filename);
 							fflush(fp);
 							fclose(fp);
-							FD_CLR(fd[i],&inputs);
+							FD_CLR(fd[curchn],&inputs);
+							chn_status[curchn] = 0;
 							if (0 == (--remain_chn_num))
 							{
+								FD_ZERO(&inputs);
 								pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 								if (FALSE == p_gs_snapshot_thd_param->snapshot_cond.wake)
 								{
