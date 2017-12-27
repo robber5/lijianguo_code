@@ -520,6 +520,7 @@ static void *record_get_frame_thread(void *p)
 								s_framelist_node[index] = record_alloc_framelist_node();
 								if (NULL == s_framelist_node[index])
 								{
+									s_p_record_thd_param->thd_stat = THD_STAT_STOP;
 									goto err;
 								}
 							}
@@ -577,50 +578,46 @@ static void *record_get_frame_thread(void *p)
 					}
 					break;
 				}
+		}
 err:
-
-				if (THD_STAT_START != s_p_record_thd_param->thd_stat)//录像结束关闭MP4文件
+		if (THD_STAT_START != s_p_record_thd_param->thd_stat)//录像结束关闭MP4文件
+		{
+			if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
+			{
+				if (NULL != s_framelist_node[0])
 				{
-					if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
-					{
-						if (NULL != s_framelist_node[0])
-						{
-							videoEncoder.stopRecvStream(chn[0]);
-							s_framelist_node[0]->last = TRUE;
-							s_framelist_node[0]->first = FALSE;
-							record_add_gop(s_framelist_node[0]);
-							s_framelist_node[0] = NULL;
-							start_time[0] = 0;
-							file_size[0] = 0;
-						}
-					}
-					else
-					{
-						for (i = 1; i < CHN_COUNT; i++)
-						{
-							if (NULL != s_framelist_node[i])
-							{
-								videoEncoder.stopRecvStream(chn[i]);
-								s_framelist_node[i]->last = TRUE;
-								s_framelist_node[i]->first = FALSE;
-								record_add_gop(s_framelist_node[i]);
-								s_framelist_node[i] = NULL;
-								start_time[i] = 0;
-								file_size[i] = 0;
-							}
-						}
-					}
-					pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
-					if (TRUE == s_p_record_thd_param->record_cond.wake)
-					{
-						s_p_record_thd_param->record_cond.wake = FALSE;
-						pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//通知录像已关闭
-					}
-					pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
-
-					break;
+					videoEncoder.stopRecvStream(chn[0]);
+					s_framelist_node[0]->last = TRUE;
+					s_framelist_node[0]->first = FALSE;
+					record_add_gop(s_framelist_node[0]);
+					s_framelist_node[0] = NULL;
+					start_time[0] = 0;
+					file_size[0] = 0;
 				}
-
+			}
+			else
+			{
+				for (i = 1; i < CHN_COUNT; i++)
+				{
+					if (NULL != s_framelist_node[i])
+					{
+						videoEncoder.stopRecvStream(chn[i]);
+						s_framelist_node[i]->last = TRUE;
+						s_framelist_node[i]->first = FALSE;
+						record_add_gop(s_framelist_node[i]);
+						s_framelist_node[i] = NULL;
+						start_time[i] = 0;
+						file_size[i] = 0;
+					}
+				}
+			}
+			pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+			if (TRUE == s_p_record_thd_param->record_cond.wake)
+			{
+				s_p_record_thd_param->record_cond.wake = FALSE;
+				pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);//通知录像已关闭
+			}
+			pthread_mutex_unlock(&s_p_record_thd_param->record_cond.mutex);
 		}
 
 	}
