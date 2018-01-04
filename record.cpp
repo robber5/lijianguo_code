@@ -54,7 +54,7 @@ using namespace detu_record;
 
 #define CHN_COUNT 5
 
-#define GOP_COUNT_MAX 16
+#define GOP_COUNT_MAX 8
 
 #define FRAME_COUNT_MAX 35
 
@@ -586,14 +586,14 @@ err:
 			{
 				if (NULL != s_framelist_node[0])
 				{
-					videoEncoder.stopRecvStream(chn[0]);
 					s_framelist_node[0]->last = TRUE;
 					s_framelist_node[0]->first = FALSE;
 					record_add_gop(s_framelist_node[0]);
 					s_framelist_node[0] = NULL;
-					start_time[0] = 0;
-					file_size[0] = 0;
 				}
+				videoEncoder.stopRecvStream(chn[0]);
+				start_time[0] = 0;
+				file_size[0] = 0;
 			}
 			else
 			{
@@ -601,14 +601,15 @@ err:
 				{
 					if (NULL != s_framelist_node[i])
 					{
-						videoEncoder.stopRecvStream(chn[i]);
 						s_framelist_node[i]->last = TRUE;
 						s_framelist_node[i]->first = FALSE;
 						record_add_gop(s_framelist_node[i]);
 						s_framelist_node[i] = NULL;
-						start_time[i] = 0;
-						file_size[i] = 0;
+
 					}
+					start_time[i] = 0;
+					file_size[i] = 0;
+					videoEncoder.stopRecvStream(chn[i]);
 				}
 			}
 			pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
@@ -977,7 +978,6 @@ static S_Result record_check_config(const Json::Value& config)
 static S_Result record_param_init(void)
 {
 	ConfigManager& config = *ConfigManager::instance();
-	const bool toSave = false;
 
 	Json::Value recCfg, response;
 
@@ -985,7 +985,7 @@ static S_Result record_param_init(void)
 
 	config.getConfig("record.status.value", recCfg, response);
 	recCfg = "stop";
-	config.setConfig("record.status.value", recCfg, response, toSave);
+	config.setTempConfig("record.status.value", recCfg, response);
 
 	config.getConfig(RECORD_M, recCfg, response);
 
@@ -1094,7 +1094,6 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 	Json::Value reccfg;
 	ConfigManager& config = *ConfigManager::instance();
 	RECORD_USER_CONFIG_S oldcfg,newcfg;
-	const bool toSave = false;
 
 	memset(&newcfg, 0, sizeof(newcfg));
 	memset(&oldcfg, 0, sizeof(oldcfg));
@@ -1117,7 +1116,7 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 				{
 					config.getConfig("record.status.value", reccfg, response);
 					reccfg = "stop";
-					config.setConfig("record.status.value", reccfg, response, toSave);
+					config.setTempConfig("record.status.value", reccfg, response);
 					S_ret = S_ERROR;
 				}
 				break;
@@ -1130,7 +1129,7 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 			{
 				config.getConfig("record.status.value", reccfg, response);
 				reccfg = "stop";
-				config.setConfig("record.status.value", reccfg, response, toSave);
+				config.setTempConfig("record.status.value", reccfg, response);
 				S_ret = S_ERROR;
 			}
 		}

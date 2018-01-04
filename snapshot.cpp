@@ -472,7 +472,6 @@ static S_Result snapshot_thread_cb(const void* clientData, const std::string& na
 	Json::Value snapcfg;
 	SNAPSHOT_USER_CONFIG_S oldcfg,newcfg;
 	ConfigManager& config = *ConfigManager::instance();
-	const bool toSave = false;
 
 	memset(&newcfg, 0, sizeof(newcfg));
 	memset(&oldcfg, 0, sizeof(oldcfg));
@@ -495,7 +494,7 @@ static S_Result snapshot_thread_cb(const void* clientData, const std::string& na
 				{
 					config.getConfig("snapshot.status.value", snapcfg, response);
 					snapcfg = "stop";
-					config.setConfig("snapshot.status.value", snapcfg, response, toSave);
+					config.setTempConfig("snapshot.status.value", snapcfg, response);
 					S_ret = S_ERROR;
 				}
 				break;
@@ -663,7 +662,6 @@ static void snapshot_cond_init(SNAPSHOT_COND_S *snapshot_cond)
 static S_Result snapshot_param_init()
 {
 	ConfigManager& config = *ConfigManager::instance();
-	const bool toSave = false;
 
 	Json::Value snapCfg, response;
 
@@ -671,7 +669,7 @@ static S_Result snapshot_param_init()
 
 	config.getConfig("snapshot.status.value", snapCfg, response);
 	snapCfg = "stop";
-	config.setConfig("snapshot.status.value", snapCfg, response, toSave);
+	config.setTempConfig("snapshot.status.value", snapCfg, response);
 
 	config.getConfig(SNAPSHOT_M, snapCfg, response);
 

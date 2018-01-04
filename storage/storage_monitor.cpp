@@ -34,7 +34,6 @@ void *storage_sdcard_monitor(void *arg)
     char buf[4096];
     struct iovec iov;
     struct msghdr msg;
-	const bool toSave = false;
 //	int i;
 
     memset(&sa,0,sizeof(sa));
@@ -88,14 +87,14 @@ void *storage_sdcard_monitor(void *arg)
 				if (!(reccfg.asString()).compare("start"))
 				{
 					reccfg = "stop";
-					config.setConfig("record.status.value", reccfg, response, toSave);
+					config.setTempConfig("record.status.value", reccfg, response);
 					storage_sdcard_umount();
 				}
 				config.getConfig("snapshot.status.value", snapcfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					snapcfg = "stop";
-					config.setConfig("snapshot.status.value", snapcfg, response, toSave);
+					config.setTempConfig("snapshot.status.value", snapcfg, response);
 					storage_sdcard_umount();
 				}
 				printf("remove the sd_card\n");
