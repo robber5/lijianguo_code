@@ -737,9 +737,13 @@ static void *record_write_mp4_thread(void *p)
 		}
 		if (TRUE == framelist_node->last)
 		{
-			mp4_encoder[chn].Close();
-			mp4_encoder[chn].Release();
-			printf("chn[%d]close file\n", chn);
+			mp4_encoder[chn].GetFileState(state);
+			if (1 == state)
+			{
+				mp4_encoder[chn].Close();
+				mp4_encoder[chn].Release();
+				printf("chn[%d]close file\n", chn);
+			}
 		}
 		pthread_mutex_lock(&s_framelist_info->mutex);
 		list_del_init(&framelist_node->list);
@@ -890,6 +894,7 @@ int gpio_test_out(unsigned int gpio_chip_num, unsigned int gpio_offset_num, int 
         fclose(fp);
         return 0;
 }
+#if 0
 #if 1
 static void *record_listen_cmd_thread(void *p)
 {
@@ -966,7 +971,7 @@ static void *record_listen_cmd_thread(void *p)
 
 }
 #endif
-
+#endif
 static S_Result record_thread_create(void)
 {
 //	pthread_attr_t attr1,attr2;
@@ -1096,33 +1101,43 @@ static void record_cond_deinit(RECORD_COND_S *record_cond)
 static S_Result record_trans_config(const Json::Value& config,RECORD_USER_CONFIG_S& usercfg)
 {
 	int i = 0;
-
-	for (i = 0; i < THD_STAT_MAX; i++)
+	if (config.isMember(REC_STATUS))
 	{
-		if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+		for (i = 0; i < THD_STAT_MAX; i++)
 		{
-			usercfg.thd_stat = (THD_STAT_E)i;
-			break;
+			if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+			{
+				usercfg.thd_stat = (THD_STAT_E)i;
+				break;
+			}
 		}
 	}
-	for (i = 0; i < CODEC_MAX; i++)
+	if (config.isMember(VIDEO_ENTYPE))
 	{
-		if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+		for (i = 0; i < CODEC_MAX; i++)
 		{
-			usercfg.entype = (CODEC_TYPE_E)i;
-			break;
+			if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+			{
+				usercfg.entype = (CODEC_TYPE_E)i;
+				break;
+			}
 		}
 	}
-	for (i = 0; i < RECORD_MODE_MAX; i++)
+	if (config.isMember(REC_MODE))
 	{
-		if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+		for (i = 0; i < RECORD_MODE_MAX; i++)
 		{
-			usercfg.record_mode = (RECORD_MODE_E)i;
-			break;
+			if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+			{
+				usercfg.record_mode = (RECORD_MODE_E)i;
+				break;
+			}
 		}
 	}
-
-	usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+	if (config.isMember(REC_MODE))
+	{
+		usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+	}
 
 	return S_OK;
 
@@ -1133,44 +1148,56 @@ static S_Result record_check_config(const Json::Value& config)
 	int delay_time = 0;
 	int i = 0;
 	S_Result S_ret = S_OK;
-	delay_time = config[DELAY_TIME][VALUE].asInt();
+	if (config.isMember(DELAY_TIME))
+	{
+		delay_time = config[DELAY_TIME][VALUE].asInt();
+	}
 	do
 	{
-		for (i = 0; i < THD_STAT_MAX; i++)
+		if (config.isMember(REC_STATUS))
 		{
-			if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+			for (i = 0; i < THD_STAT_MAX; i++)
 			{
+				if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+				{
+					break;
+				}
+			}
+			if (THD_STAT_MAX == i)
+			{
+				S_ret = S_ERROR;
 				break;
 			}
 		}
-		if (THD_STAT_MAX == i)
+		if (config.isMember(VIDEO_ENTYPE))
 		{
-			S_ret = S_ERROR;
-			break;
-		}
-		for (i = 0; i < CODEC_MAX; i++)
-		{
-			if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+			for (i = 0; i < CODEC_MAX; i++)
 			{
+				if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+				{
+					break;
+				}
+			}
+			if (CODEC_MAX == i)
+			{
+				S_ret = S_ERROR;
 				break;
 			}
 		}
-		if (CODEC_MAX == i)
+		if (config.isMember(REC_MODE))
 		{
-			S_ret = S_ERROR;
-			break;
-		}
-		for (i = 0; i < RECORD_MODE_MAX; i++)
-		{
-			if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+			for (i = 0; i < RECORD_MODE_MAX; i++)
 			{
+				if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+				{
+					break;
+				}
+			}
+			if (RECORD_MODE_MAX == i)
+			{
+				S_ret = S_ERROR;
 				break;
 			}
-		}
-		if (RECORD_MODE_MAX == i)
-		{
-			S_ret = S_ERROR;
-			break;
 		}
 		if (0 > delay_time)
 		{
@@ -1191,9 +1218,9 @@ static S_Result record_param_init(void)
 
 	RECORD_USER_CONFIG_S usercfg;
 
-	config.getConfig("record.status.value", recCfg, response);
-	recCfg = "stop";
-	config.setTempConfig("record.status.value", recCfg, response);
+	config.setTempConfig("record.status.value", "stop", response);
+	config.getTempConfig(RECORD_M, recCfg, response);
+	record_trans_config(recCfg, usercfg);
 
 	config.getConfig(RECORD_M, recCfg, response);
 
@@ -1330,7 +1357,7 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 				usleep(10*1000);
 				if (S_ERROR == record_thread_start(newcfg))
 				{
-					config.getConfig("record.status.value", reccfg, response);
+					config.getTempConfig("record.status.value", reccfg, response);
 					reccfg = "stop";
 					config.setTempConfig("record.status.value", reccfg, response);
 					S_ret = S_ERROR;
@@ -1343,7 +1370,7 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 			printf("restart record\n");
 			if (S_ERROR == record_thread_restart(newcfg))
 			{
-				config.getConfig("record.status.value", reccfg, response);
+				config.getTempConfig("record.status.value", reccfg, response);
 				reccfg = "stop";
 				config.setTempConfig("record.status.value", reccfg, response);
 				S_ret = S_ERROR;

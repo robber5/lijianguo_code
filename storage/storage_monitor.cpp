@@ -83,14 +83,14 @@ void *storage_sdcard_monitor(void *arg)
 			else if ((NULL != strstr(buf, REMOVE)) && ( 1 != sdcard_status))
 			{
 				sdcard_status = 1;
-				config.getConfig("record.status.value", reccfg, response);
+				config.getTempConfig("record.status.value", reccfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					reccfg = "stop";
 					config.setTempConfig("record.status.value", reccfg, response);
 					storage_sdcard_umount();
 				}
-				config.getConfig("snapshot.status.value", snapcfg, response);
+				config.getTempConfig("snapshot.status.value", snapcfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					snapcfg = "stop";

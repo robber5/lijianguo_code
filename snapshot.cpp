@@ -356,32 +356,43 @@ static S_Result snapshot_trans_config(const Json::Value& config,SNAPSHOT_USER_CO
 {
 	int i = 0;
 
-	for (i = 0; i < THD_STAT_MAX; i++)
+	if (config.isMember(SNAPSHOT_STATUS))
 	{
-		if (!(config[SNAPSHOT_STATUS][VALUE].asString()).compare(s_snapshot_status[i]))
+		for (i = 0; i < THD_STAT_MAX; i++)
 		{
-			usercfg.thd_stat = (THD_STAT_E)i;
-			break;
+			if (!(config[SNAPSHOT_STATUS][VALUE].asString()).compare(s_snapshot_status[i]))
+			{
+				usercfg.thd_stat = (THD_STAT_E)i;
+				break;
+			}
 		}
 	}
-	for (i = 0; i < CHN_NUM_MAX; i++)
+	if (config.isMember(PIC_CHN))
 	{
-		if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
+		for (i = 0; i < CHN_NUM_MAX; i++)
 		{
-			usercfg.chn = i;
-			break;
+			if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
+			{
+				usercfg.chn = i;
+				break;
+			}
 		}
 	}
-	for (i = 0; i < SNAPSHOT_MODE_MAX; i++)
+	if (config.isMember(SNAPSHOT_MODE))
 	{
-		if (!(config[SNAPSHOT_MODE][VALUE].asString()).compare(s_snapshot_mode[i]))
+		for (i = 0; i < SNAPSHOT_MODE_MAX; i++)
 		{
-			usercfg.snapshot_mode = (SNAPSHOT_MODE_E)i;
-			break;
+			if (!(config[SNAPSHOT_MODE][VALUE].asString()).compare(s_snapshot_mode[i]))
+			{
+				usercfg.snapshot_mode = (SNAPSHOT_MODE_E)i;
+				break;
+			}
 		}
 	}
-
-	usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+	if (config.isMember(DELAY_TIME))
+	{
+		usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+	}
 
 	return S_OK;
 
@@ -393,47 +404,60 @@ static S_Result snapshot_check_config(const Json::Value& config)
 	int delay_time = 0;
 	int i = 0;
 	S_Result S_ret = S_OK;
-	delay_time = config[DELAY_TIME][VALUE].asInt();
+
+	if (config.isMember(DELAY_TIME))
+	{
+		delay_time = config[DELAY_TIME][VALUE].asInt();
+	}
 	do
 	{
-		for (i = 0; i < THD_STAT_MAX; i++)
+		if (config.isMember(SNAPSHOT_STATUS))
 		{
-			if (!(config[SNAPSHOT_STATUS][VALUE].asString()).compare(s_snapshot_status[i]))
+			for (i = 0; i < THD_STAT_MAX; i++)
 			{
+				if (!(config[SNAPSHOT_STATUS][VALUE].asString()).compare(s_snapshot_status[i]))
+				{
+					break;
+				}
+			}
+			if (THD_STAT_MAX == i)
+			{
+				S_ret = S_ERROR;
+				printf("status error\n");
 				break;
 			}
 		}
-		if (THD_STAT_MAX == i)
+		if (config.isMember(PIC_CHN))
 		{
-			S_ret = S_ERROR;
-			printf("status error\n");
-			break;
-		}
-		for (i = 0; i < CHN_NUM_MAX; i++)
-		{
-			if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
+			for (i = 0; i < CHN_NUM_MAX; i++)
 			{
+				if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
+				{
+					break;
+				}
+			}
+			if (CHN_NUM_MAX == i)
+			{
+				S_ret = S_ERROR;
+				printf("chn error\n");
 				break;
 			}
 		}
-		if (CHN_NUM_MAX == i)
+		if (config.isMember(SNAPSHOT_MODE))
 		{
-			S_ret = S_ERROR;
-			printf("chn error\n");
-			break;
-		}
-		for (i = 0; i < SNAPSHOT_MODE_MAX; i++)
-		{
-			if (!(config[SNAPSHOT_MODE][VALUE].asString()).compare(s_snapshot_mode[i]))
+			for (i = 0; i < SNAPSHOT_MODE_MAX; i++)
 			{
+				if (!(config[SNAPSHOT_MODE][VALUE].asString()).compare(s_snapshot_mode[i]))
+				{
+					break;
+				}
+			}
+			if (SNAPSHOT_MODE_MAX == i)
+			{
+				S_ret = S_ERROR;
+				printf("mode error\n");
 				break;
 			}
-		}
-		if (SNAPSHOT_MODE_MAX == i)
-		{
-			S_ret = S_ERROR;
-			printf("mode error\n");
-			break;
 		}
 		if (0 > delay_time)
 		{
@@ -492,7 +516,7 @@ static S_Result snapshot_thread_cb(const void* clientData, const std::string& na
 			{
 				if (S_ERROR == snapshot_thread_start(newcfg))
 				{
-					config.getConfig("snapshot.status.value", snapcfg, response);
+					config.getTempConfig("snapshot.status.value", snapcfg, response);
 					snapcfg = "stop";
 					config.setTempConfig("snapshot.status.value", snapcfg, response);
 					S_ret = S_ERROR;
@@ -667,9 +691,9 @@ static S_Result snapshot_param_init()
 
 	SNAPSHOT_USER_CONFIG_S usercfg;
 
-	config.getConfig("snapshot.status.value", snapCfg, response);
-	snapCfg = "stop";
-	config.setTempConfig("snapshot.status.value", snapCfg, response);
+	config.setTempConfig("snapshot.status.value", "stop", response);
+	config.getTempConfig(SNAPSHOT_M, snapCfg, response);
+	snapshot_trans_config(snapCfg, usercfg);
 
 	config.getConfig(SNAPSHOT_M, snapCfg, response);
 
