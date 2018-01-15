@@ -97,11 +97,11 @@ void *storage_sdcard_monitor(void *arg)
 					config.setTempConfig("snapshot.status.value", snapcfg, response);
 					storage_sdcard_umount();
 				}
-				printf("remove the sd_card\n");
+				//printf("remove the sd_card\n");
 			}
 		}
 
-	    printf("received %d bytes\n%s\n",len,buf);
+	    //printf("received %d bytes\n%s\n",len,buf);
 		memset(buf, 0, 4096 * sizeof(char));
     }
 }

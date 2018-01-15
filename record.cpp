@@ -54,7 +54,7 @@ using namespace detu_record;
 
 #define CHN_COUNT 5
 
-#define GOP_COUNT_MAX 8
+#define GOP_COUNT_MAX 6
 
 #define FRAME_COUNT_MAX 35
 
@@ -128,6 +128,7 @@ typedef struct record_thread_params
 	pthread_t           gpid;
 	pthread_t           fpid;
 	pthread_t           wpid;
+	pthread_t           lpid;
 	volatile THD_STAT_E thd_stat;
 	RECORD_COND_S		record_cond;//条件变量，录像控制
 	pthread_mutex_t     mutex;//命令锁，保证同时只执行一条命令
@@ -289,8 +290,8 @@ static S_Result record_get_mp4_filename(char *filename, int index)
 	struct tm local_time;
 	localtime_r(&time_seconds, &local_time);
 
-	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
-		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
+	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d-%s.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
+		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec, s_video_dir[index]);
 
 	return S_OK;
 }
@@ -342,7 +343,7 @@ static FRAMELIST_S *record_alloc_framelist_node(void)
 		return NULL;
 	}
 	memset(framelist_node, 0, sizeof(FRAMELIST_S));
-	//framelist_node->packetSize = 0;
+	framelist_node->gopsize = 0;
 
 	return framelist_node;
 }
@@ -352,7 +353,7 @@ static S_Result record_add_gop(FRAMELIST_S *goplist_node)
 	if ((NULL != s_framelist_info) && (NULL != s_framelist_head) && (NULL != goplist_node))
 	{
 		pthread_mutex_lock(&s_framelist_info->mutex);
-		if (GOP_COUNT_MAX > s_framelist_info->gop_count)
+		if ((GOP_COUNT_MAX > s_framelist_info->gop_count) || (TRUE == goplist_node->last))
 		{
 			list_add_tail(&goplist_node->list, &s_framelist_head->list);
 			s_framelist_info->gop_count++;
@@ -427,7 +428,7 @@ static void *record_get_frame_thread(void *p)
 		else
 		{
 			fd[0] = -1;
-			for (i = 1; i < CHN_COUNT; i++)
+			for (i = 0; i < CHN_COUNT; i++)
 			{
 				videoEncoder.getFd(chn[i], fd[i]);
 			}
@@ -460,8 +461,8 @@ static void *record_get_frame_thread(void *p)
 		}
 		else
 		{
-			fd_max = get_max_fd(&fd[1], CHN_COUNT - 1);
-			for (i = 1; i < CHN_COUNT; i++)
+			fd_max = get_max_fd(&fd[0], CHN_COUNT);
+			for (i = 0; i < CHN_COUNT; i++)
 			{
 				videoEncoder.startRecvStream(chn[i]);
 				FD_SET(fd[i],&inputs);
@@ -591,13 +592,23 @@ err:
 					record_add_gop(s_framelist_node[0]);
 					s_framelist_node[0] = NULL;
 				}
-				videoEncoder.stopRecvStream(chn[0]);
+				else
+				{
+					s_framelist_node[0] = record_alloc_framelist_node();
+					s_framelist_node[0]->entype = s_p_record_thd_param->entype;
+					s_framelist_node[0]->chn = 0;
+					s_framelist_node[0]->last = TRUE;
+					s_framelist_node[0]->first = FALSE;
+					record_add_gop(s_framelist_node[0]);
+					s_framelist_node[0] = NULL;
+				}
 				start_time[0] = 0;
 				file_size[0] = 0;
+				videoEncoder.stopRecvStream(chn[0]);
 			}
 			else
 			{
-				for (i = 1; i < CHN_COUNT; i++)
+				for (i = 0; i < CHN_COUNT; i++)
 				{
 					if (NULL != s_framelist_node[i])
 					{
@@ -605,11 +616,21 @@ err:
 						s_framelist_node[i]->first = FALSE;
 						record_add_gop(s_framelist_node[i]);
 						s_framelist_node[i] = NULL;
+					}
+					else
+					{
+						s_framelist_node[i] = record_alloc_framelist_node();
+						s_framelist_node[i]->entype = s_p_record_thd_param->entype;
+						s_framelist_node[i]->chn = i;
+						s_framelist_node[i]->last = TRUE;
+						s_framelist_node[i]->first = FALSE;
+						record_add_gop(s_framelist_node[i]);
+						s_framelist_node[i] = NULL;
 
 					}
+					videoEncoder.stopRecvStream(chn[i]);
 					start_time[i] = 0;
 					file_size[i] = 0;
-					videoEncoder.stopRecvStream(chn[i]);
 				}
 			}
 			pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
@@ -703,13 +724,16 @@ static void *record_write_mp4_thread(void *p)
 				goto exit;
 			}
 		}
-		for (i = 0, offset = 0; i < framelist_node->frame_count; i++)
+		if (0 != framelist_node->gopsize)
 		{
-			if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
+			for (i = 0, offset = 0; i < framelist_node->frame_count; i++)
 			{
-				DBG_INFO("Write video frame failed\n");
+				if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
+				{
+					DBG_INFO("Write video frame failed\n");
+				}
+				offset += framelist_node->packetSize[i];
 			}
-			offset += framelist_node->packetSize[i];
 		}
 		if (TRUE == framelist_node->last)
 		{
@@ -766,6 +790,182 @@ static S_Result record_framelist_init(void)
 	return S_OK;
 }
 
+int gpio_test_in(unsigned int gpio_chip_num, unsigned int gpio_offset_num)
+{
+        FILE *fp;
+        char file_name[50];
+        char buf[10];
+        unsigned int gpio_num;
+
+        gpio_num = gpio_chip_num * 8 + gpio_offset_num;
+        sprintf(file_name, "/sys/class/gpio/export");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/direction", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+        fprintf(fp, "in");
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/value", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+
+        memset(buf, 0, 10);
+        fread(buf, sizeof(char), sizeof(buf) - 1, fp);
+        //printf("%s: gpio%d_%d = %d\n", __func__,
+        //gpio_chip_num, gpio_offset_num, buf[0]-48);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/unexport");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+        return (int)(buf[0]-48);
+}
+
+int gpio_test_out(unsigned int gpio_chip_num, unsigned int gpio_offset_num, int gpio_out_val)
+{
+        FILE *fp;
+        char file_name[50];
+        char buf[10];
+        unsigned int gpio_num;
+        gpio_num = gpio_chip_num * 8 + gpio_offset_num;
+        sprintf(file_name, "/sys/class/gpio/export");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/direction", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        fprintf(fp, "out");
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/value", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        if (gpio_out_val)
+                strcpy(buf,"1");
+        else
+                strcpy(buf,"0");
+        fwrite(buf, sizeof(char), sizeof(buf) - 1, fp);
+        //printf("%s: gpio%d_%d = %s\n", __func__,
+        //gpio_chip_num, gpio_offset_num, buf);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/unexport");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+        return 0;
+}
+#if 1
+static void *record_listen_cmd_thread(void *p)
+{
+	int status_cur = 0, status_bef = 0, count = 0;
+	ConfigManager& config = *ConfigManager::instance();
+	const bool toSave = false;
+
+	Json::Value recCfg, response;
+
+	while (s_record_enable_flag)
+	{
+		status_cur = gpio_test_in(4,2);
+		if ((0 == status_cur) && (1 == status_bef))
+		{
+			count = !count;
+			if(count)
+			{
+				gpio_test_out(7,5,0);
+				config.getConfig("record.status.value", recCfg, response);
+				recCfg = "start";
+				config.setConfig("record.status.value", recCfg, response, toSave);
+			}
+			else
+			{
+				gpio_test_out(7,5,0);
+				config.getConfig("record.status.value", recCfg, response);
+				recCfg = "stop";
+				config.setConfig("record.status.value", recCfg, response, toSave);
+			}
+		}
+		status_bef = status_cur;
+		usleep(10*1000);
+		gpio_test_in(7,5);
+		gpio_test_in(7,5);
+		usleep(10*1000);
+	}
+
+	return (void *)S_OK;
+}
+#else
+static void *record_listen_cmd_thread(void *p)
+{
+	int status_cur = 1, status_bef = 1, count = 0;
+	ConfigManager& config = *ConfigManager::instance();
+	const bool toSave = false;
+
+	Json::Value recCfg, response;
+
+	while (s_record_enable_flag)
+	{
+		gpio_test_in(7,5);
+		status_cur = gpio_test_in(7,5);
+		if ((0 == status_cur) && (1 == status_bef))
+		{
+				count = !count;
+				if(count)
+				{
+					printf("start\n");
+					config.getConfig("record.status.value", recCfg, response);
+					recCfg = "start";
+					config.setConfig("record.status.value", recCfg, response, toSave);
+				}
+				else
+				{
+					config.getConfig("record.status.value", recCfg, response);
+					recCfg = "stop";
+					config.setConfig("record.status.value", recCfg, response, toSave);
+				}
+		}
+		status_bef = status_cur;
+		usleep(10*1000);
+	}
+	return (void *)S_OK;
+
+}
+#endif
 
 static S_Result record_thread_create(void)
 {
@@ -813,7 +1013,15 @@ static S_Result record_thread_create(void)
 		return S_ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->fpid, "recf\0");
-
+#if 0
+	if (0 != pthread_create(&s_p_record_thd_param->lpid, NULL, record_listen_cmd_thread, NULL))
+	{
+		perror("pthread_create failed");
+		printf("pthread_create flush cache thread failed\n");
+		return S_ERROR;
+	}
+	pthread_setname_np(s_p_record_thd_param->lpid, "recl\0");
+#endif
 	return S_OK;
 
 }
@@ -1003,6 +1211,7 @@ static S_Result record_param_init(void)
 	s_p_record_thd_param->gpid = PID_NULL;
 	s_p_record_thd_param->fpid = PID_NULL;
 	s_p_record_thd_param->wpid = PID_NULL;
+	s_p_record_thd_param->lpid = PID_NULL;
 	s_p_record_thd_param->thd_stat = usercfg.thd_stat;
 	s_p_record_thd_param->stream_t = MEDIA_TYPE_VIDEO;
 	s_p_record_thd_param->entype = usercfg.entype;
@@ -1081,8 +1290,13 @@ static S_Result record_thread_destroy(void)
 		pthread_join(s_p_record_thd_param->fpid, 0);
 		s_p_record_thd_param->fpid = PID_NULL;
 	}
-
-
+#if 0
+	if (s_p_record_thd_param->lpid != PID_NULL)
+	{
+		pthread_join(s_p_record_thd_param->lpid, 0);
+		s_p_record_thd_param->lpid = PID_NULL;
+	}
+#endif
 	record_framelist_destroy();
 
 	return S_OK;
@@ -1108,10 +1322,12 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 			if (THD_STAT_STOP == newcfg.thd_stat)
 			{
 				record_thread_stop();
+				usleep(10*1000);
 				break;
 			}
 			else
 			{
+				usleep(10*1000);
 				if (S_ERROR == record_thread_start(newcfg))
 				{
 					config.getConfig("record.status.value", reccfg, response);
