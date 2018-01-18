@@ -121,7 +121,7 @@ static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg);
 
 static S_Result snapshot_thread_stop();
 
-static S_Result record_get_jpeg_filename(char *filename, int index)
+static S_Result snapshot_get_jpeg_filename(char *filename, int index)
 {
 	time_t time_seconds = time(NULL);
 	struct tm local_time;
@@ -132,6 +132,19 @@ static S_Result record_get_jpeg_filename(char *filename, int index)
 
 	return S_OK;
 }
+
+static S_Result snapshot_set_chn(Uint32_t *chn)
+{
+	chn[0] = 0;
+	chn[1] = 1;
+	chn[2] = 2;
+	chn[3] = 3;
+	chn[4] = 4;
+	chn[5] = 5;
+
+	return S_OK;
+}
+
 
 static int get_max_fd(int *fd, int num)
 {
@@ -160,7 +173,7 @@ static void *snapshot_thread(void *p)
 	int fd_found[CHN_COUNT];
 	Uint32_t chn[CHN_COUNT];
 	Uint32_t chnnum = 0;
-	Uint32_t curchn = 0;
+	Uint32_t index = 0;
 	Uint32_t seq = 0u;
 	char filename[FILE_NAME_LEN_MAX];
 	FILE *fp = NULL;
@@ -215,9 +228,9 @@ static void *snapshot_thread(void *p)
 		else
 		{
 			FD_ZERO(&inputs);
+			snapshot_set_chn(chn);
 			for (i = 0; i < CHN_COUNT; i++)
 			{
-				chn[i] = i;
 				videoEncoder.startRecvStream(chn[i]);
 				videoEncoder.getFd(chn[i], fd[i]);
 				FD_SET(fd[i],&inputs);
@@ -259,24 +272,24 @@ static void *snapshot_thread(void *p)
 
 					for (i = 0; i < j; i++)
 					{
-						curchn = fd_found[i];
+						index = fd_found[i];
 						packetSize = PACKET_SIZE_MAX;
-						videoEncoder.getStream(curchn, seq, packet, packetSize, pts);
+						videoEncoder.getStream(chn[index], seq, packet, packetSize, pts);
 
 						if (PIC_COUNT_MIN > pic_count)
 						{
-							if (0 == curchn)
+							if (0 == index)
 							{
 								pic_count++;
 							}
 							continue;
 						}
-						else if (0 == chn_status[curchn])
+						else if (0 == chn_status[index])
 						{
 							continue;
 						}
-						record_get_jpeg_filename(filename, curchn);
-						if (SNAPSHOT_MODE_SINGLE == p_gs_snapshot_thd_param->snapshot_mode)
+						snapshot_get_jpeg_filename(filename, index);
+						if ((SNAPSHOT_MODE_SINGLE == p_gs_snapshot_thd_param->snapshot_mode) && (0 < remain_chn_num))
 						{
 							//todo 写入sd卡
 							if (NULL == (fp = fopen(filename, "wb")))
@@ -289,9 +302,11 @@ static void *snapshot_thread(void *p)
 							printf("create file:%s\n", filename);
 							fflush(fp);
 							fclose(fp);
-							FD_CLR(fd[curchn],&inputs);
-							chn_status[curchn] = 0;
-							if (0 == (--remain_chn_num))
+							FD_CLR(fd[index],&inputs);
+							videoEncoder.stopRecvStream(chn[index]);
+							chn_status[index] = 0;
+							--remain_chn_num;
+							if (0 == remain_chn_num)
 							{
 								FD_ZERO(&inputs);
 								pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
@@ -325,13 +340,21 @@ static void *snapshot_thread(void *p)
 			pic_count = 0;
 			if (CHN_COUNT > chnnum)
 			{
-				videoEncoder.stopRecvStream(chn[0]);
+				if (1 == chn_status[0])
+				{
+					videoEncoder.stopRecvStream(chn[0]);
+				}
 			}
 			else
 			{
 				for (i = 0; i < CHN_COUNT; i++)
 				{
-					videoEncoder.stopRecvStream(chn[i]);
+
+					if (1 == chn_status[i])
+					{
+						videoEncoder.stopRecvStream(chn[i]);
+					}
+
 				}
 
 			}
@@ -356,7 +379,7 @@ static S_Result snapshot_trans_config(const Json::Value& config,SNAPSHOT_USER_CO
 {
 	int i = 0;
 
-	if (config.isMember(SNAPSHOT_STATUS))
+	if (config.isMember(SNAPSHOT_STATUS) && config[SNAPSHOT_STATUS].isMember(VALUE))
 	{
 		for (i = 0; i < THD_STAT_MAX; i++)
 		{
@@ -409,9 +432,10 @@ static S_Result snapshot_check_config(const Json::Value& config)
 	{
 		delay_time = config[DELAY_TIME][VALUE].asInt();
 	}
+	printf("config:%s\n", config.toStyledString().c_str());
 	do
 	{
-		if (config.isMember(SNAPSHOT_STATUS))
+		if (config.isMember(SNAPSHOT_STATUS) && config[SNAPSHOT_STATUS].isMember(VALUE))
 		{
 			for (i = 0; i < THD_STAT_MAX; i++)
 			{
@@ -500,7 +524,10 @@ static S_Result snapshot_thread_cb(const void* clientData, const std::string& na
 	memset(&newcfg, 0, sizeof(newcfg));
 	memset(&oldcfg, 0, sizeof(oldcfg));
 
+	config.getConfig(SNAPSHOT_M, snapcfg, response);
+
 	snapshot_trans_config(newConfig, newcfg);
+	snapshot_trans_config(snapcfg, newcfg);
 	snapshot_trans_config(oldConfig, oldcfg);
 
 	do

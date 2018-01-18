@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <semaphore.h>
 
 #include "video_encoder.h"
 
@@ -54,7 +55,7 @@ using namespace detu_record;
 
 #define CHN_COUNT 5
 
-#define GOP_COUNT_MAX 6
+#define GOP_COUNT_MAX 15
 
 #define FRAME_COUNT_MAX 35
 
@@ -156,8 +157,9 @@ typedef struct framelist_s
 
 typedef struct listinfo_s
 {
-	pthread_cond_t cond;
+	//pthread_cond_t cond;
 	pthread_mutex_t mutex;
+	sem_t sem;
 	Uint32_t gop_count;
 	FRAMELIST_S *listhead;
 } LISTINFO_S;
@@ -178,7 +180,7 @@ static FRAMELIST_S *s_framelist_head;
 
 static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg);
 static S_Result record_thread_stop(void);
-static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg);
+//static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg);
 
 
 static NALU_TYPE_E get_the_nalu_type(Uint8_t *packet, CODEC_TYPE_E encode_type)
@@ -250,25 +252,60 @@ static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 	return ret;
 }
 
-/*
-static int Is_the_Iframe(Uint8_t *packet, CODEC_TYPE_E encode_type)
+
+static int Is_the_Bframe(Uint8_t *packet, CODEC_TYPE_E encode_type)
 {
 	int ret = FALSE;
 	NALU_TYPE_E nalu_type;
 
 	nalu_type = get_the_nalu_type(packet + 4, encode_type);
-	if ((CODEC_H264 == encode_type) && (NALU_TYPE_H264_IDR == nalu_type))
+	if (CODEC_H264 == encode_type)
 	{
-		ret = TRUE;
-	}
-	else if ((CODEC_H265 == encode_type) && ((NALU_TYPE_H265_IDR_W_RADL == nalu_type) || (NALU_TYPE_H265_IDR_N_LP == nalu_type)))
-	{
-		ret = TRUE;
-	}
+		switch (nalu_type)
+		{
+			case NALU_TYPE_H264_IDR:
+				break;
+			case NALU_TYPE_H264_SPS:
+				break;
+			case NALU_TYPE_H264_PPS:
+				break;
+			case NALU_TYPE_H264_SEI:
+				break;
 
+			default:
+				ret = TRUE;
+				break;
+		}
+	}
+	else
+	{
+		switch (nalu_type)
+		{
+			case NALU_TYPE_H265_IDR_W_RADL:
+				break;
+			case NALU_TYPE_H265_IDR_N_LP:
+				break;
+			case NALU_TYPE_H265_VPS:
+				break;
+			case NALU_TYPE_H265_SPS:
+				break;
+			case NALU_TYPE_H265_PPS:
+				break;
+			case NALU_TYPE_H265_SEI_PREFIX:
+				break;
+			case NALU_TYPE_H265_SEI_SUFFIX:
+				break;
+
+			default:
+				ret = TRUE;
+				break;
+		}
+
+
+	}
 	return ret;
 }
-*/
+
 
 static int Is_gopsize_reach_mark(Uint32_t packetSize)
 {
@@ -359,7 +396,7 @@ static S_Result record_add_gop(FRAMELIST_S *goplist_node)
 			s_framelist_info->gop_count++;
 			if (1 == s_framelist_info->gop_count)
 			{
-				pthread_cond_signal(&s_framelist_info->cond);
+				sem_post(&s_framelist_info->sem);
 			}
 		}
 		else
@@ -537,8 +574,17 @@ static void *record_get_frame_thread(void *p)
 							s_framelist_node[index] = NULL;
 							break;
 						}
+
+						if (0 == start_time[index])
+						{
+							if (TRUE == Is_the_Bframe(packet, framelist_node->entype))
+							{
+								break;
+							}
+						}
 						//printf("chn:%d, packet size:%d\n", fd_found[i], packetSize);
 						framelist_node->gopsize += packetSize;
+
 						if (UNCOMPLETE == Is_the_frame_completed(packet, framelist_node->entype))//组合第一帧数据
 						{
 							framelist_node->packetSize[frame_count] += packetSize;
@@ -565,12 +611,14 @@ static void *record_get_frame_thread(void *p)
 								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
 								start_time[index] = 0;
 								file_size[index] = 0;
+								printf("time reach mark!\n");
 							}
 							else if (FILE_SIZE_MAX <= file_size[index])//文件大小不能超过2G
 							{
 								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
 								start_time[index] = 0;
 								file_size[index] = 0;
+								printf("file size reach mark!\n");
 							}
 							record_add_gop(framelist_node);
 							s_framelist_node[index] = NULL;//处理完数据指针置为NULL
@@ -605,6 +653,7 @@ err:
 				start_time[0] = 0;
 				file_size[0] = 0;
 				videoEncoder.stopRecvStream(chn[0]);
+				printf("record stop!\n");
 			}
 			else
 			{
@@ -632,6 +681,7 @@ err:
 					start_time[i] = 0;
 					file_size[i] = 0;
 				}
+				printf("record stop!\n");
 			}
 			pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
 			if (TRUE == s_p_record_thd_param->record_cond.wake)
@@ -694,22 +744,17 @@ static void *record_write_mp4_thread(void *p)
 	{
 		if (0 == s_framelist_info->gop_count)
 		{
-			pthread_mutex_lock(&s_framelist_info->mutex);
-			if (0 == s_framelist_info->gop_count)
+			do
 			{
-				do
+				//pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
+				sem_wait(&s_framelist_info->sem);
+				if(((FALSE == s_record_enable_flag)
+					|| (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)) && (0 == s_framelist_info->gop_count))
 				{
-					pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
-					if(((FALSE == s_record_enable_flag)
-						|| (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)) && (0 == s_framelist_info->gop_count))
-					{
-						pthread_mutex_unlock(&s_framelist_info->mutex);
-						goto exit;//退出线程
-					}
+					goto exit;//退出线程
+				}
 
-				}while(0 == s_framelist_info->gop_count);
-			}
-			pthread_mutex_unlock(&s_framelist_info->mutex);
+			}while(0 == s_framelist_info->gop_count);
 		}
 
 		framelist_node = list_entry(s_framelist_head->list.next, FRAMELIST_S, list);
@@ -780,7 +825,8 @@ static S_Result record_framelist_init(void)
 	}
 	s_framelist_info->gop_count = 0;
 	s_framelist_info->mutex = PTHREAD_MUTEX_INITIALIZER;
-	s_framelist_info->cond = PTHREAD_COND_INITIALIZER;
+	//s_framelist_info->cond = PTHREAD_COND_INITIALIZER;
+	sem_init(&(s_framelist_info->sem),0,0);
 	s_framelist_info->listhead = (FRAMELIST_S *)malloc(sizeof(FRAMELIST_S));
 	if (NULL == s_framelist_info->listhead)
 	{
@@ -1058,6 +1104,7 @@ static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg)
 	pthread_mutex_lock(&s_p_record_thd_param->mutex);
 
 	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+
 	if (THD_STAT_START != s_p_record_thd_param->thd_stat)
 	{
 		s_p_record_thd_param->thd_stat = THD_STAT_START;
@@ -1101,7 +1148,7 @@ static void record_cond_deinit(RECORD_COND_S *record_cond)
 static S_Result record_trans_config(const Json::Value& config,RECORD_USER_CONFIG_S& usercfg)
 {
 	int i = 0;
-	if (config.isMember(REC_STATUS))
+	if (config.isMember(REC_STATUS) && config[REC_STATUS].isMember(VALUE))
 	{
 		for (i = 0; i < THD_STAT_MAX; i++)
 		{
@@ -1154,7 +1201,7 @@ static S_Result record_check_config(const Json::Value& config)
 	}
 	do
 	{
-		if (config.isMember(REC_STATUS))
+		if (config.isMember(REC_STATUS) && config[REC_STATUS].isMember(VALUE))
 		{
 			for (i = 0; i < THD_STAT_MAX; i++)
 			{
@@ -1220,12 +1267,12 @@ static S_Result record_param_init(void)
 
 	config.setTempConfig("record.status.value", "stop", response);
 	config.getTempConfig(RECORD_M, recCfg, response);
+	printf("init status:%s\n", recCfg.toStyledString().c_str());
 	record_trans_config(recCfg, usercfg);
 
 	config.getConfig(RECORD_M, recCfg, response);
 
 	record_trans_config(recCfg, usercfg);
-
 	s_p_record_thd_param = (p_record_thread_params_s)malloc(sizeof(RECORD_THREAD_PARAMS_S));
 	if (NULL == s_p_record_thd_param)
 	{
@@ -1283,7 +1330,8 @@ static S_Result record_framelist_destroy(void)
 	if (s_framelist_info != NULL)
 	{
 		pthread_mutex_destroy(&s_framelist_info->mutex);
-		pthread_cond_destroy(&s_framelist_info->cond);
+		//pthread_cond_destroy(&s_framelist_info->cond);
+		sem_destroy(&s_framelist_info->sem);
 		free(s_framelist_info);
 		s_framelist_info = NULL;
 	}
@@ -1306,7 +1354,7 @@ static S_Result record_thread_destroy(void)
 		pthread_join(s_p_record_thd_param->gpid, 0);
 		s_p_record_thd_param->gpid = PID_NULL;
 	}
-	pthread_cond_signal(&s_framelist_info->cond);//退出写线程
+	sem_post(&s_framelist_info->sem);//退出写线程
 	if (s_p_record_thd_param->wpid != PID_NULL)
 	{
 		pthread_join(s_p_record_thd_param->wpid, 0);
@@ -1339,22 +1387,24 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 	memset(&newcfg, 0, sizeof(newcfg));
 	memset(&oldcfg, 0, sizeof(oldcfg));
 
+	config.getConfig(RECORD_M, reccfg, response);
+	record_trans_config(reccfg, newcfg);
+
 	record_trans_config(newConfig, newcfg);
 	record_trans_config(oldConfig, oldcfg);
 
 	do
 	{
+		printf("set status:%s, old status:%s!\n", newConfig.toStyledString().c_str(), oldConfig.toStyledString().c_str());
 		if (newcfg.thd_stat != oldcfg.thd_stat)
 		{
 			if (THD_STAT_STOP == newcfg.thd_stat)
 			{
 				record_thread_stop();
-				usleep(10*1000);
 				break;
 			}
 			else
 			{
-				usleep(10*1000);
 				if (S_ERROR == record_thread_start(newcfg))
 				{
 					config.getTempConfig("record.status.value", reccfg, response);
@@ -1365,9 +1415,8 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 				break;
 			}
 		}
-		if ((newcfg.entype != oldcfg.entype) || (newcfg.record_mode != oldcfg.record_mode))
+/*		if ((newcfg.entype != oldcfg.entype) || (newcfg.record_mode != oldcfg.record_mode))
 		{
-			printf("restart record\n");
 			if (S_ERROR == record_thread_restart(newcfg))
 			{
 				config.getTempConfig("record.status.value", reccfg, response);
@@ -1376,6 +1425,7 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 				S_ret = S_ERROR;
 			}
 		}
+*/
 	} while (0);
 
 	return S_ret;
@@ -1448,7 +1498,7 @@ S_Result record_module_exit(void)
 	record_param_exit();
 	return S_OK;
 }
-
+#if 0
 /*
 录像重启
 */
@@ -1493,7 +1543,7 @@ static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg)
 
 	return S_ret;
 }
-
+#endif
 #if 0
 
 /*
