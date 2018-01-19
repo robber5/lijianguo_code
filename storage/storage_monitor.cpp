@@ -83,25 +83,25 @@ void *storage_sdcard_monitor(void *arg)
 			else if ((NULL != strstr(buf, REMOVE)) && ( 1 != sdcard_status))
 			{
 				sdcard_status = 1;
-				config.getConfig("record.status.value", reccfg, response);
+				config.getTempConfig("record.status.value", reccfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					reccfg = "stop";
 					config.setTempConfig("record.status.value", reccfg, response);
 					storage_sdcard_umount();
 				}
-				config.getConfig("snapshot.status.value", snapcfg, response);
+				config.getTempConfig("snapshot.status.value", snapcfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					snapcfg = "stop";
 					config.setTempConfig("snapshot.status.value", snapcfg, response);
 					storage_sdcard_umount();
 				}
-				printf("remove the sd_card\n");
+				//printf("remove the sd_card\n");
 			}
 		}
 
-	    printf("received %d bytes\n%s\n",len,buf);
+	    //printf("received %d bytes\n%s\n",len,buf);
 		memset(buf, 0, 4096 * sizeof(char));
     }
 }

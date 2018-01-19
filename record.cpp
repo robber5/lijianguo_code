@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <semaphore.h>
 
 #include "video_encoder.h"
 
@@ -54,7 +55,7 @@ using namespace detu_record;
 
 #define CHN_COUNT 5
 
-#define GOP_COUNT_MAX 8
+#define GOP_COUNT_MAX 15
 
 #define FRAME_COUNT_MAX 35
 
@@ -128,6 +129,7 @@ typedef struct record_thread_params
 	pthread_t           gpid;
 	pthread_t           fpid;
 	pthread_t           wpid;
+	pthread_t           lpid;
 	volatile THD_STAT_E thd_stat;
 	RECORD_COND_S		record_cond;//条件变量，录像控制
 	pthread_mutex_t     mutex;//命令锁，保证同时只执行一条命令
@@ -155,8 +157,9 @@ typedef struct framelist_s
 
 typedef struct listinfo_s
 {
-	pthread_cond_t cond;
+	//pthread_cond_t cond;
 	pthread_mutex_t mutex;
+	sem_t sem;
 	Uint32_t gop_count;
 	FRAMELIST_S *listhead;
 } LISTINFO_S;
@@ -177,7 +180,7 @@ static FRAMELIST_S *s_framelist_head;
 
 static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg);
 static S_Result record_thread_stop(void);
-static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg);
+//static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg);
 
 
 static NALU_TYPE_E get_the_nalu_type(Uint8_t *packet, CODEC_TYPE_E encode_type)
@@ -249,25 +252,60 @@ static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 	return ret;
 }
 
-/*
-static int Is_the_Iframe(Uint8_t *packet, CODEC_TYPE_E encode_type)
+
+static int Is_the_Bframe(Uint8_t *packet, CODEC_TYPE_E encode_type)
 {
 	int ret = FALSE;
 	NALU_TYPE_E nalu_type;
 
 	nalu_type = get_the_nalu_type(packet + 4, encode_type);
-	if ((CODEC_H264 == encode_type) && (NALU_TYPE_H264_IDR == nalu_type))
+	if (CODEC_H264 == encode_type)
 	{
-		ret = TRUE;
-	}
-	else if ((CODEC_H265 == encode_type) && ((NALU_TYPE_H265_IDR_W_RADL == nalu_type) || (NALU_TYPE_H265_IDR_N_LP == nalu_type)))
-	{
-		ret = TRUE;
-	}
+		switch (nalu_type)
+		{
+			case NALU_TYPE_H264_IDR:
+				break;
+			case NALU_TYPE_H264_SPS:
+				break;
+			case NALU_TYPE_H264_PPS:
+				break;
+			case NALU_TYPE_H264_SEI:
+				break;
 
+			default:
+				ret = TRUE;
+				break;
+		}
+	}
+	else
+	{
+		switch (nalu_type)
+		{
+			case NALU_TYPE_H265_IDR_W_RADL:
+				break;
+			case NALU_TYPE_H265_IDR_N_LP:
+				break;
+			case NALU_TYPE_H265_VPS:
+				break;
+			case NALU_TYPE_H265_SPS:
+				break;
+			case NALU_TYPE_H265_PPS:
+				break;
+			case NALU_TYPE_H265_SEI_PREFIX:
+				break;
+			case NALU_TYPE_H265_SEI_SUFFIX:
+				break;
+
+			default:
+				ret = TRUE;
+				break;
+		}
+
+
+	}
 	return ret;
 }
-*/
+
 
 static int Is_gopsize_reach_mark(Uint32_t packetSize)
 {
@@ -289,8 +327,8 @@ static S_Result record_get_mp4_filename(char *filename, int index)
 	struct tm local_time;
 	localtime_r(&time_seconds, &local_time);
 
-	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
-		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
+	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d-%s.mp4", MOUNT_DIR, s_video_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
+		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec, s_video_dir[index]);
 
 	return S_OK;
 }
@@ -342,7 +380,7 @@ static FRAMELIST_S *record_alloc_framelist_node(void)
 		return NULL;
 	}
 	memset(framelist_node, 0, sizeof(FRAMELIST_S));
-	//framelist_node->packetSize = 0;
+	framelist_node->gopsize = 0;
 
 	return framelist_node;
 }
@@ -352,13 +390,13 @@ static S_Result record_add_gop(FRAMELIST_S *goplist_node)
 	if ((NULL != s_framelist_info) && (NULL != s_framelist_head) && (NULL != goplist_node))
 	{
 		pthread_mutex_lock(&s_framelist_info->mutex);
-		if (GOP_COUNT_MAX > s_framelist_info->gop_count)
+		if ((GOP_COUNT_MAX > s_framelist_info->gop_count) || (TRUE == goplist_node->last))
 		{
 			list_add_tail(&goplist_node->list, &s_framelist_head->list);
 			s_framelist_info->gop_count++;
 			if (1 == s_framelist_info->gop_count)
 			{
-				pthread_cond_signal(&s_framelist_info->cond);
+				sem_post(&s_framelist_info->sem);
 			}
 		}
 		else
@@ -427,7 +465,7 @@ static void *record_get_frame_thread(void *p)
 		else
 		{
 			fd[0] = -1;
-			for (i = 1; i < CHN_COUNT; i++)
+			for (i = 0; i < CHN_COUNT; i++)
 			{
 				videoEncoder.getFd(chn[i], fd[i]);
 			}
@@ -460,8 +498,8 @@ static void *record_get_frame_thread(void *p)
 		}
 		else
 		{
-			fd_max = get_max_fd(&fd[1], CHN_COUNT - 1);
-			for (i = 1; i < CHN_COUNT; i++)
+			fd_max = get_max_fd(&fd[0], CHN_COUNT);
+			for (i = 0; i < CHN_COUNT; i++)
 			{
 				videoEncoder.startRecvStream(chn[i]);
 				FD_SET(fd[i],&inputs);
@@ -536,8 +574,17 @@ static void *record_get_frame_thread(void *p)
 							s_framelist_node[index] = NULL;
 							break;
 						}
+
+						if (0 == start_time[index])
+						{
+							if (TRUE == Is_the_Bframe(packet, framelist_node->entype))
+							{
+								break;
+							}
+						}
 						//printf("chn:%d, packet size:%d\n", fd_found[i], packetSize);
 						framelist_node->gopsize += packetSize;
+
 						if (UNCOMPLETE == Is_the_frame_completed(packet, framelist_node->entype))//组合第一帧数据
 						{
 							framelist_node->packetSize[frame_count] += packetSize;
@@ -564,12 +611,14 @@ static void *record_get_frame_thread(void *p)
 								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
 								start_time[index] = 0;
 								file_size[index] = 0;
+								printf("time reach mark!\n");
 							}
 							else if (FILE_SIZE_MAX <= file_size[index])//文件大小不能超过2G
 							{
 								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
 								start_time[index] = 0;
 								file_size[index] = 0;
+								printf("file size reach mark!\n");
 							}
 							record_add_gop(framelist_node);
 							s_framelist_node[index] = NULL;//处理完数据指针置为NULL
@@ -591,13 +640,24 @@ err:
 					record_add_gop(s_framelist_node[0]);
 					s_framelist_node[0] = NULL;
 				}
-				videoEncoder.stopRecvStream(chn[0]);
+				else
+				{
+					s_framelist_node[0] = record_alloc_framelist_node();
+					s_framelist_node[0]->entype = s_p_record_thd_param->entype;
+					s_framelist_node[0]->chn = 0;
+					s_framelist_node[0]->last = TRUE;
+					s_framelist_node[0]->first = FALSE;
+					record_add_gop(s_framelist_node[0]);
+					s_framelist_node[0] = NULL;
+				}
 				start_time[0] = 0;
 				file_size[0] = 0;
+				videoEncoder.stopRecvStream(chn[0]);
+				printf("record stop!\n");
 			}
 			else
 			{
-				for (i = 1; i < CHN_COUNT; i++)
+				for (i = 0; i < CHN_COUNT; i++)
 				{
 					if (NULL != s_framelist_node[i])
 					{
@@ -605,12 +665,23 @@ err:
 						s_framelist_node[i]->first = FALSE;
 						record_add_gop(s_framelist_node[i]);
 						s_framelist_node[i] = NULL;
+					}
+					else
+					{
+						s_framelist_node[i] = record_alloc_framelist_node();
+						s_framelist_node[i]->entype = s_p_record_thd_param->entype;
+						s_framelist_node[i]->chn = i;
+						s_framelist_node[i]->last = TRUE;
+						s_framelist_node[i]->first = FALSE;
+						record_add_gop(s_framelist_node[i]);
+						s_framelist_node[i] = NULL;
 
 					}
+					videoEncoder.stopRecvStream(chn[i]);
 					start_time[i] = 0;
 					file_size[i] = 0;
-					videoEncoder.stopRecvStream(chn[i]);
 				}
+				printf("record stop!\n");
 			}
 			pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
 			if (TRUE == s_p_record_thd_param->record_cond.wake)
@@ -673,22 +744,17 @@ static void *record_write_mp4_thread(void *p)
 	{
 		if (0 == s_framelist_info->gop_count)
 		{
-			pthread_mutex_lock(&s_framelist_info->mutex);
-			if (0 == s_framelist_info->gop_count)
+			do
 			{
-				do
+				//pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
+				sem_wait(&s_framelist_info->sem);
+				if(((FALSE == s_record_enable_flag)
+					|| (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)) && (0 == s_framelist_info->gop_count))
 				{
-					pthread_cond_wait(&s_framelist_info->cond, &s_framelist_info->mutex);
-					if(((FALSE == s_record_enable_flag)
-						|| (THD_STAT_QUIT == s_p_record_thd_param->thd_stat)) && (0 == s_framelist_info->gop_count))
-					{
-						pthread_mutex_unlock(&s_framelist_info->mutex);
-						goto exit;//退出线程
-					}
+					goto exit;//退出线程
+				}
 
-				}while(0 == s_framelist_info->gop_count);
-			}
-			pthread_mutex_unlock(&s_framelist_info->mutex);
+			}while(0 == s_framelist_info->gop_count);
 		}
 
 		framelist_node = list_entry(s_framelist_head->list.next, FRAMELIST_S, list);
@@ -703,19 +769,26 @@ static void *record_write_mp4_thread(void *p)
 				goto exit;
 			}
 		}
-		for (i = 0, offset = 0; i < framelist_node->frame_count; i++)
+		if (0 != framelist_node->gopsize)
 		{
-			if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
+			for (i = 0, offset = 0; i < framelist_node->frame_count; i++)
 			{
-				DBG_INFO("Write video frame failed\n");
+				if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
+				{
+					DBG_INFO("Write video frame failed\n");
+				}
+				offset += framelist_node->packetSize[i];
 			}
-			offset += framelist_node->packetSize[i];
 		}
 		if (TRUE == framelist_node->last)
 		{
-			mp4_encoder[chn].Close();
-			mp4_encoder[chn].Release();
-			printf("chn[%d]close file\n", chn);
+			mp4_encoder[chn].GetFileState(state);
+			if (1 == state)
+			{
+				mp4_encoder[chn].Close();
+				mp4_encoder[chn].Release();
+				printf("chn[%d]close file\n", chn);
+			}
 		}
 		pthread_mutex_lock(&s_framelist_info->mutex);
 		list_del_init(&framelist_node->list);
@@ -752,7 +825,8 @@ static S_Result record_framelist_init(void)
 	}
 	s_framelist_info->gop_count = 0;
 	s_framelist_info->mutex = PTHREAD_MUTEX_INITIALIZER;
-	s_framelist_info->cond = PTHREAD_COND_INITIALIZER;
+	//s_framelist_info->cond = PTHREAD_COND_INITIALIZER;
+	sem_init(&(s_framelist_info->sem),0,0);
 	s_framelist_info->listhead = (FRAMELIST_S *)malloc(sizeof(FRAMELIST_S));
 	if (NULL == s_framelist_info->listhead)
 	{
@@ -766,7 +840,184 @@ static S_Result record_framelist_init(void)
 	return S_OK;
 }
 
+int gpio_test_in(unsigned int gpio_chip_num, unsigned int gpio_offset_num)
+{
+        FILE *fp;
+        char file_name[50];
+        char buf[10];
+        unsigned int gpio_num;
 
+        gpio_num = gpio_chip_num * 8 + gpio_offset_num;
+        sprintf(file_name, "/sys/class/gpio/export");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/direction", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+        fprintf(fp, "in");
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/value", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+
+        memset(buf, 0, 10);
+        fread(buf, sizeof(char), sizeof(buf) - 1, fp);
+        //printf("%s: gpio%d_%d = %d\n", __func__,
+        //gpio_chip_num, gpio_offset_num, buf[0]-48);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/unexport");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+                printf("Cannot open %s.\n", file_name);
+                return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+        return (int)(buf[0]-48);
+}
+
+int gpio_test_out(unsigned int gpio_chip_num, unsigned int gpio_offset_num, int gpio_out_val)
+{
+        FILE *fp;
+        char file_name[50];
+        char buf[10];
+        unsigned int gpio_num;
+        gpio_num = gpio_chip_num * 8 + gpio_offset_num;
+        sprintf(file_name, "/sys/class/gpio/export");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/direction", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        fprintf(fp, "out");
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/gpio%d/value", gpio_num);
+        fp = fopen(file_name, "rb+");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        if (gpio_out_val)
+                strcpy(buf,"1");
+        else
+                strcpy(buf,"0");
+        fwrite(buf, sizeof(char), sizeof(buf) - 1, fp);
+        //printf("%s: gpio%d_%d = %s\n", __func__,
+        //gpio_chip_num, gpio_offset_num, buf);
+        fclose(fp);
+
+        sprintf(file_name, "/sys/class/gpio/unexport");
+        fp = fopen(file_name, "w");
+        if (fp == NULL) {
+        printf("Cannot open %s.\n", file_name);
+        return -1;
+        }
+        fprintf(fp, "%d", gpio_num);
+        fclose(fp);
+        return 0;
+}
+#if 0
+#if 1
+static void *record_listen_cmd_thread(void *p)
+{
+	int status_cur = 0, status_bef = 0, count = 0;
+	ConfigManager& config = *ConfigManager::instance();
+	const bool toSave = false;
+
+	Json::Value recCfg, response;
+
+	while (s_record_enable_flag)
+	{
+		status_cur = gpio_test_in(4,2);
+		if ((0 == status_cur) && (1 == status_bef))
+		{
+			count = !count;
+			if(count)
+			{
+				gpio_test_out(7,5,0);
+				config.getConfig("record.status.value", recCfg, response);
+				recCfg = "start";
+				config.setConfig("record.status.value", recCfg, response, toSave);
+			}
+			else
+			{
+				gpio_test_out(7,5,0);
+				config.getConfig("record.status.value", recCfg, response);
+				recCfg = "stop";
+				config.setConfig("record.status.value", recCfg, response, toSave);
+			}
+		}
+		status_bef = status_cur;
+		usleep(10*1000);
+		gpio_test_in(7,5);
+		gpio_test_in(7,5);
+		usleep(10*1000);
+	}
+
+	return (void *)S_OK;
+}
+#else
+static void *record_listen_cmd_thread(void *p)
+{
+	int status_cur = 1, status_bef = 1, count = 0;
+	ConfigManager& config = *ConfigManager::instance();
+	const bool toSave = false;
+
+	Json::Value recCfg, response;
+
+	while (s_record_enable_flag)
+	{
+		gpio_test_in(7,5);
+		status_cur = gpio_test_in(7,5);
+		if ((0 == status_cur) && (1 == status_bef))
+		{
+				count = !count;
+				if(count)
+				{
+					printf("start\n");
+					config.getConfig("record.status.value", recCfg, response);
+					recCfg = "start";
+					config.setConfig("record.status.value", recCfg, response, toSave);
+				}
+				else
+				{
+					config.getConfig("record.status.value", recCfg, response);
+					recCfg = "stop";
+					config.setConfig("record.status.value", recCfg, response, toSave);
+				}
+		}
+		status_bef = status_cur;
+		usleep(10*1000);
+	}
+	return (void *)S_OK;
+
+}
+#endif
+#endif
 static S_Result record_thread_create(void)
 {
 //	pthread_attr_t attr1,attr2;
@@ -813,7 +1064,15 @@ static S_Result record_thread_create(void)
 		return S_ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->fpid, "recf\0");
-
+#if 0
+	if (0 != pthread_create(&s_p_record_thd_param->lpid, NULL, record_listen_cmd_thread, NULL))
+	{
+		perror("pthread_create failed");
+		printf("pthread_create flush cache thread failed\n");
+		return S_ERROR;
+	}
+	pthread_setname_np(s_p_record_thd_param->lpid, "recl\0");
+#endif
 	return S_OK;
 
 }
@@ -845,6 +1104,7 @@ static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg)
 	pthread_mutex_lock(&s_p_record_thd_param->mutex);
 
 	pthread_mutex_lock(&s_p_record_thd_param->record_cond.mutex);
+
 	if (THD_STAT_START != s_p_record_thd_param->thd_stat)
 	{
 		s_p_record_thd_param->thd_stat = THD_STAT_START;
@@ -888,33 +1148,43 @@ static void record_cond_deinit(RECORD_COND_S *record_cond)
 static S_Result record_trans_config(const Json::Value& config,RECORD_USER_CONFIG_S& usercfg)
 {
 	int i = 0;
-
-	for (i = 0; i < THD_STAT_MAX; i++)
+	if (config.isMember(REC_STATUS) && config[REC_STATUS].isMember(VALUE))
 	{
-		if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+		for (i = 0; i < THD_STAT_MAX; i++)
 		{
-			usercfg.thd_stat = (THD_STAT_E)i;
-			break;
+			if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+			{
+				usercfg.thd_stat = (THD_STAT_E)i;
+				break;
+			}
 		}
 	}
-	for (i = 0; i < CODEC_MAX; i++)
+	if (config.isMember(VIDEO_ENTYPE))
 	{
-		if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+		for (i = 0; i < CODEC_MAX; i++)
 		{
-			usercfg.entype = (CODEC_TYPE_E)i;
-			break;
+			if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+			{
+				usercfg.entype = (CODEC_TYPE_E)i;
+				break;
+			}
 		}
 	}
-	for (i = 0; i < RECORD_MODE_MAX; i++)
+	if (config.isMember(REC_MODE))
 	{
-		if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+		for (i = 0; i < RECORD_MODE_MAX; i++)
 		{
-			usercfg.record_mode = (RECORD_MODE_E)i;
-			break;
+			if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+			{
+				usercfg.record_mode = (RECORD_MODE_E)i;
+				break;
+			}
 		}
 	}
-
-	usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+	if (config.isMember(REC_MODE))
+	{
+		usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+	}
 
 	return S_OK;
 
@@ -925,44 +1195,56 @@ static S_Result record_check_config(const Json::Value& config)
 	int delay_time = 0;
 	int i = 0;
 	S_Result S_ret = S_OK;
-	delay_time = config[DELAY_TIME][VALUE].asInt();
+	if (config.isMember(DELAY_TIME))
+	{
+		delay_time = config[DELAY_TIME][VALUE].asInt();
+	}
 	do
 	{
-		for (i = 0; i < THD_STAT_MAX; i++)
+		if (config.isMember(REC_STATUS) && config[REC_STATUS].isMember(VALUE))
 		{
-			if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+			for (i = 0; i < THD_STAT_MAX; i++)
 			{
+				if (!(config[REC_STATUS][VALUE].asString()).compare(s_rec_status[i]))
+				{
+					break;
+				}
+			}
+			if (THD_STAT_MAX == i)
+			{
+				S_ret = S_ERROR;
 				break;
 			}
 		}
-		if (THD_STAT_MAX == i)
+		if (config.isMember(VIDEO_ENTYPE))
 		{
-			S_ret = S_ERROR;
-			break;
-		}
-		for (i = 0; i < CODEC_MAX; i++)
-		{
-			if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+			for (i = 0; i < CODEC_MAX; i++)
 			{
+				if (!(config[VIDEO_ENTYPE][VALUE].asString()).compare(s_video_entype[i]))
+				{
+					break;
+				}
+			}
+			if (CODEC_MAX == i)
+			{
+				S_ret = S_ERROR;
 				break;
 			}
 		}
-		if (CODEC_MAX == i)
+		if (config.isMember(REC_MODE))
 		{
-			S_ret = S_ERROR;
-			break;
-		}
-		for (i = 0; i < RECORD_MODE_MAX; i++)
-		{
-			if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+			for (i = 0; i < RECORD_MODE_MAX; i++)
 			{
+				if (!(config[REC_MODE][VALUE].asString()).compare(s_rec_mode[i]))
+				{
+					break;
+				}
+			}
+			if (RECORD_MODE_MAX == i)
+			{
+				S_ret = S_ERROR;
 				break;
 			}
-		}
-		if (RECORD_MODE_MAX == i)
-		{
-			S_ret = S_ERROR;
-			break;
 		}
 		if (0 > delay_time)
 		{
@@ -983,14 +1265,14 @@ static S_Result record_param_init(void)
 
 	RECORD_USER_CONFIG_S usercfg;
 
-	config.getConfig("record.status.value", recCfg, response);
-	recCfg = "stop";
-	config.setTempConfig("record.status.value", recCfg, response);
+	config.setTempConfig("record.status.value", "stop", response);
+	config.getTempConfig(RECORD_M, recCfg, response);
+	printf("init status:%s\n", recCfg.toStyledString().c_str());
+	record_trans_config(recCfg, usercfg);
 
 	config.getConfig(RECORD_M, recCfg, response);
 
 	record_trans_config(recCfg, usercfg);
-
 	s_p_record_thd_param = (p_record_thread_params_s)malloc(sizeof(RECORD_THREAD_PARAMS_S));
 	if (NULL == s_p_record_thd_param)
 	{
@@ -1003,6 +1285,7 @@ static S_Result record_param_init(void)
 	s_p_record_thd_param->gpid = PID_NULL;
 	s_p_record_thd_param->fpid = PID_NULL;
 	s_p_record_thd_param->wpid = PID_NULL;
+	s_p_record_thd_param->lpid = PID_NULL;
 	s_p_record_thd_param->thd_stat = usercfg.thd_stat;
 	s_p_record_thd_param->stream_t = MEDIA_TYPE_VIDEO;
 	s_p_record_thd_param->entype = usercfg.entype;
@@ -1047,7 +1330,8 @@ static S_Result record_framelist_destroy(void)
 	if (s_framelist_info != NULL)
 	{
 		pthread_mutex_destroy(&s_framelist_info->mutex);
-		pthread_cond_destroy(&s_framelist_info->cond);
+		//pthread_cond_destroy(&s_framelist_info->cond);
+		sem_destroy(&s_framelist_info->sem);
 		free(s_framelist_info);
 		s_framelist_info = NULL;
 	}
@@ -1070,7 +1354,7 @@ static S_Result record_thread_destroy(void)
 		pthread_join(s_p_record_thd_param->gpid, 0);
 		s_p_record_thd_param->gpid = PID_NULL;
 	}
-	pthread_cond_signal(&s_framelist_info->cond);//退出写线程
+	sem_post(&s_framelist_info->sem);//退出写线程
 	if (s_p_record_thd_param->wpid != PID_NULL)
 	{
 		pthread_join(s_p_record_thd_param->wpid, 0);
@@ -1081,8 +1365,13 @@ static S_Result record_thread_destroy(void)
 		pthread_join(s_p_record_thd_param->fpid, 0);
 		s_p_record_thd_param->fpid = PID_NULL;
 	}
-
-
+#if 0
+	if (s_p_record_thd_param->lpid != PID_NULL)
+	{
+		pthread_join(s_p_record_thd_param->lpid, 0);
+		s_p_record_thd_param->lpid = PID_NULL;
+	}
+#endif
 	record_framelist_destroy();
 
 	return S_OK;
@@ -1098,11 +1387,15 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 	memset(&newcfg, 0, sizeof(newcfg));
 	memset(&oldcfg, 0, sizeof(oldcfg));
 
+	config.getConfig(RECORD_M, reccfg, response);
+	record_trans_config(reccfg, newcfg);
+
 	record_trans_config(newConfig, newcfg);
 	record_trans_config(oldConfig, oldcfg);
 
 	do
 	{
+		printf("set status:%s, old status:%s!\n", newConfig.toStyledString().c_str(), oldConfig.toStyledString().c_str());
 		if (newcfg.thd_stat != oldcfg.thd_stat)
 		{
 			if (THD_STAT_STOP == newcfg.thd_stat)
@@ -1114,7 +1407,7 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 			{
 				if (S_ERROR == record_thread_start(newcfg))
 				{
-					config.getConfig("record.status.value", reccfg, response);
+					config.getTempConfig("record.status.value", reccfg, response);
 					reccfg = "stop";
 					config.setTempConfig("record.status.value", reccfg, response);
 					S_ret = S_ERROR;
@@ -1122,17 +1415,17 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 				break;
 			}
 		}
-		if ((newcfg.entype != oldcfg.entype) || (newcfg.record_mode != oldcfg.record_mode))
+/*		if ((newcfg.entype != oldcfg.entype) || (newcfg.record_mode != oldcfg.record_mode))
 		{
-			printf("restart record\n");
 			if (S_ERROR == record_thread_restart(newcfg))
 			{
-				config.getConfig("record.status.value", reccfg, response);
+				config.getTempConfig("record.status.value", reccfg, response);
 				reccfg = "stop";
 				config.setTempConfig("record.status.value", reccfg, response);
 				S_ret = S_ERROR;
 			}
 		}
+*/
 	} while (0);
 
 	return S_ret;
@@ -1205,7 +1498,7 @@ S_Result record_module_exit(void)
 	record_param_exit();
 	return S_OK;
 }
-
+#if 0
 /*
 录像重启
 */
@@ -1250,7 +1543,7 @@ static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg)
 
 	return S_ret;
 }
-
+#endif
 #if 0
 
 /*
