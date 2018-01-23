@@ -159,6 +159,7 @@ typedef struct listinfo_s
 {
 	//pthread_cond_t cond;
 	pthread_mutex_t mutex;
+	pthread_spinlock_t spin_lock;
 	sem_t sem;
 	Uint32_t gop_count;
 	FRAMELIST_S *listhead;
@@ -182,7 +183,7 @@ static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg);
 static S_Result record_thread_stop(void);
 //static S_Result record_thread_restart(RECORD_USER_CONFIG_S usercfg);
 
-
+/*
 static NALU_TYPE_E get_the_nalu_type(Uint8_t *packet, CODEC_TYPE_E encode_type)
 {
 	if (CODEC_H264 == encode_type)
@@ -195,6 +196,13 @@ static NALU_TYPE_E get_the_nalu_type(Uint8_t *packet, CODEC_TYPE_E encode_type)
 	}
 	return NALU_TYPE_DEFAULT;
 }
+*/
+inline static NALU_TYPE_E get_the_nalu_type(Uint8_t *packet, CODEC_TYPE_E encode_type)
+{
+
+	return (NALU_TYPE_E)((CODEC_H264 == encode_type) ? (packet[0] & 0x1F) : ((packet[0] & 0x7E)>>1));
+
+}
 
 static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 {
@@ -205,9 +213,6 @@ static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 	{
 		switch (nalu_type)
 		{
-			case NALU_TYPE_H264_IDR:
-				ret = COMPLETE;
-				break;
 			case NALU_TYPE_H264_SPS:
 				break;
 			case NALU_TYPE_H264_PPS:
@@ -224,12 +229,6 @@ static int Is_the_frame_completed(Uint8_t *packet, CODEC_TYPE_E encode_type)
 	{
 		switch (nalu_type)
 		{
-			case NALU_TYPE_H265_IDR_W_RADL:
-				ret = COMPLETE;
-				break;
-			case NALU_TYPE_H265_IDR_N_LP:
-				ret = COMPLETE;
-				break;
 			case NALU_TYPE_H265_VPS:
 				break;
 			case NALU_TYPE_H265_SPS:
@@ -389,7 +388,7 @@ static S_Result record_add_gop(FRAMELIST_S *goplist_node)
 {
 	if ((NULL != s_framelist_info) && (NULL != s_framelist_head) && (NULL != goplist_node))
 	{
-		pthread_mutex_lock(&s_framelist_info->mutex);
+		pthread_spin_lock(&s_framelist_info->spin_lock);
 		if ((GOP_COUNT_MAX > s_framelist_info->gop_count) || (TRUE == goplist_node->last))
 		{
 			list_add_tail(&goplist_node->list, &s_framelist_head->list);
@@ -404,7 +403,7 @@ static S_Result record_add_gop(FRAMELIST_S *goplist_node)
 			printf("chn[%d]drop frame,too many frame in list\n", goplist_node->chn);
 			free(goplist_node);
 		}
-		pthread_mutex_unlock(&s_framelist_info->mutex);
+		pthread_spin_unlock(&s_framelist_info->spin_lock);
 	}
 	else
 	{
@@ -716,7 +715,7 @@ static void *record_flush_cache_thread(void *p)//每写四次gop，flush一次
 		}
 		while (THD_STAT_START == s_p_record_thd_param->thd_stat)
 		{
-			sleep(1);
+			sleep(60);
 			sync();
 			system(FLUSH_CMD);
 		}
@@ -738,7 +737,7 @@ static void *record_write_mp4_thread(void *p)
 	FRAMELIST_S *framelist_node = NULL;
 
 	VideoParamter video_param = {AV_CODEC_ID_H264, 3840, 2160};
-	AudioParamter audio_param = {AV_CODEC_ID_AAC};
+	AudioParamter audio_param = {AV_CODEC_ID_NONE, 0, 0, 0};
 
 	while (s_record_enable_flag)
 	{
@@ -790,12 +789,12 @@ static void *record_write_mp4_thread(void *p)
 				printf("chn[%d]close file\n", chn);
 			}
 		}
-		pthread_mutex_lock(&s_framelist_info->mutex);
+		pthread_spin_lock(&s_framelist_info->spin_lock);
 		list_del_init(&framelist_node->list);
 		s_framelist_info->gop_count--;
 		free(framelist_node);
 		//record_flush_cache();
-		pthread_mutex_unlock(&s_framelist_info->mutex);
+		pthread_spin_unlock(&s_framelist_info->spin_lock);
 
 	}
 
@@ -825,6 +824,7 @@ static S_Result record_framelist_init(void)
 	}
 	s_framelist_info->gop_count = 0;
 	s_framelist_info->mutex = PTHREAD_MUTEX_INITIALIZER;
+	pthread_spin_init(&s_framelist_info->spin_lock, PTHREAD_PROCESS_PRIVATE);
 	//s_framelist_info->cond = PTHREAD_COND_INITIALIZER;
 	sem_init(&(s_framelist_info->sem),0,0);
 	s_framelist_info->listhead = (FRAMELIST_S *)malloc(sizeof(FRAMELIST_S));
@@ -1330,6 +1330,7 @@ static S_Result record_framelist_destroy(void)
 	if (s_framelist_info != NULL)
 	{
 		pthread_mutex_destroy(&s_framelist_info->mutex);
+		pthread_spin_destroy(&s_framelist_info->spin_lock);
 		//pthread_cond_destroy(&s_framelist_info->cond);
 		sem_destroy(&s_framelist_info->sem);
 		free(s_framelist_info);
@@ -1453,7 +1454,7 @@ static S_Result record_register_validator()
 
 }
 
-static int record_register_callback()
+static S_Result record_register_callback()
 {
 	ConfigManager& config = *ConfigManager::instance();
 

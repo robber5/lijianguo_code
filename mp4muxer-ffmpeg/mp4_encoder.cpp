@@ -37,7 +37,7 @@ AAC in some container format (FLV, MP4, MKV etc.) need
 "aac_adtstoasc" bitstream filter (BSF)
 */
 //'1': Use AAC Bitstream Filter
-#define USE_AACBSF 1
+#define USE_AACBSF 0
 #if USE_AACBSF
 AVBitStreamFilterContext *aacbsfc = NULL;
 #endif
@@ -362,18 +362,18 @@ int Mp4Encoder::WriteVideoFrame(char *frame, int length, int pts)
 #if 0
 		if (pkt.pts == AV_NOPTS_VALUE) {
 			static int frame_index = 0;
-			//Write PTS  
+			//Write PTS
 			AVRational time_base1 = video_out_stream_->codec->time_base;
-			//Duration between 2 frames (us)  
+			//Duration between 2 frames (us)
 			int64_t calc_duration = (double)AV_TIME_BASE / av_q2d(video_out_stream_->codec->time_base);
-			//Parameters  
+			//Parameters
 			pkt.pts = (double)(frame_index*calc_duration) / (double)(av_q2d(time_base1)*AV_TIME_BASE);
 			pkt.dts = pkt.pts;
 			pkt.duration = (double)calc_duration / (double)(av_q2d(time_base1)*AV_TIME_BASE);
 			frame_index++;
 		}
 
-		//Convert PTS/DTS  
+		//Convert PTS/DTS
 		pkt.pts = av_rescale_q_rnd(pkt.pts, video_out_stream_->codec->time_base, video_out_stream_->codec->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
 		pkt.dts = av_rescale_q_rnd(pkt.dts, video_out_stream_->codec->time_base, video_out_stream_->codec->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
 		pkt.duration = av_rescale_q(pkt.duration, video_out_stream_->codec->time_base, video_out_stream_->codec->time_base);
@@ -444,18 +444,18 @@ int Mp4Encoder::WriteAudioFrame(char *frame, int length, int pts)
 #if 0
 		if (pkt.pts == AV_NOPTS_VALUE) {
 			static int frame_index = 0;
-			//Write PTS  
+			//Write PTS
 			AVRational time_base1 = audio_out_stream_->codec->time_base;
-			//Duration between 2 frames (us)  
+			//Duration between 2 frames (us)
 			int64_t calc_duration = (double)AV_TIME_BASE / av_q2d(audio_out_stream_->codec->time_base);
-			//Parameters  
+			//Parameters
 			pkt.pts = (double)(frame_index*calc_duration) / (double)(av_q2d(time_base1)*AV_TIME_BASE);
 			pkt.dts = pkt.pts;
 			pkt.duration = (double)calc_duration / (double)(av_q2d(time_base1)*AV_TIME_BASE);
 			frame_index++;
 		}
 
-		//Convert PTS/DTS  
+		//Convert PTS/DTS
 		pkt.pts = av_rescale_q_rnd(pkt.pts, audio_out_stream_->codec->time_base, audio_out_stream_->codec->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
 		pkt.dts = av_rescale_q_rnd(pkt.dts, audio_out_stream_->codec->time_base, audio_out_stream_->codec->time_base, (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
 		pkt.duration = av_rescale_q(pkt.duration, audio_out_stream_->codec->time_base, audio_out_stream_->codec->time_base);

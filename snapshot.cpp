@@ -655,7 +655,7 @@ static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg)
 	S_Result S_ret = S_OK;
 
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->mutex);
-	enable_pic_mode();
+	//enable_pic_mode();
 	pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 	if (THD_STAT_START != p_gs_snapshot_thd_param->thd_stat)
 	{
@@ -670,7 +670,7 @@ static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg)
 			if ((TRUE == p_gs_snapshot_thd_param->snapshot_cond.finish) && (FALSE == p_gs_snapshot_thd_param->snapshot_cond.wake))
 			{
 				p_gs_snapshot_thd_param->snapshot_cond.finish = FALSE; //置为初始值
-				disable_pic_mode();
+				//disable_pic_mode();
 				S_ret = S_ERROR;
 				break;
 			}
@@ -696,7 +696,7 @@ static S_Result snapshot_thread_stop()
 		}while (TRUE == p_gs_snapshot_thd_param->snapshot_cond.wake);
 	}
 	pthread_mutex_unlock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
-	disable_pic_mode();
+	//disable_pic_mode();
 	pthread_mutex_unlock(&p_gs_snapshot_thd_param->mutex);
 
 	return S_OK;
