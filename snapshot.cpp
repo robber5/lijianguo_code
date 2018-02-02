@@ -133,14 +133,26 @@ static S_Result snapshot_get_jpeg_filename(char *filename, int index)
 	return S_OK;
 }
 
-static S_Result snapshot_set_chn(Uint32_t *chn)
+static S_Result snapshot_set_chn(Uint32_t *chn, Uint32_t mode)
 {
-	chn[0] = 0;
-	chn[1] = 1;
-	chn[2] = 2;
-	chn[3] = 3;
-	chn[4] = 4;
-	chn[5] = 5;
+	if (1 == mode)
+	{
+		chn[0] = CHN0_PIPE0_4K3K;
+		chn[1] = CHN1_PIPE1_4K3K;
+		chn[2] = CHN2_PIPE2_4K3K;
+		chn[3] = CHN3_PIPE3_4K3K;
+		chn[4] = CHN4_AVS_4K3K;
+		chn[5] = CHN5_AVS_1080P;
+	}
+	else
+	{
+		chn[0] = CHN8_PIPE0_JPEG;
+		chn[1] = CHN9_PIPE1_JPEG;
+		chn[2] = CHN10_PIPE2_JPEG;
+		chn[3] = CHN11_PIPE3_JPEG;
+		chn[4] = CHN14_AVS_JEPG;
+		chn[5] = CHN17_AVS_JEPG_1080P;
+	}
 
 	return S_OK;
 }
@@ -162,6 +174,10 @@ static int get_max_fd(int *fd, int num)
 
 static void *snapshot_thread(void *p)
 {
+	ConfigManager& config = *ConfigManager::instance();
+
+	Json::Value mediaCfg, response;
+
 	Uint32_t pic_count = 0;
 	fd_set inputs, testfds;
 	struct timeval timeout;
@@ -228,7 +244,16 @@ static void *snapshot_thread(void *p)
 		else
 		{
 			FD_ZERO(&inputs);
-			snapshot_set_chn(chn);
+			config.getTempConfig("media.mode.value", mediaCfg, response);
+			printf("snapmode:%d\n", mediaCfg.asInt());
+			if (0 == mediaCfg.asInt())
+			{
+				snapshot_set_chn(chn, 0);
+			}
+			else
+			{
+				snapshot_set_chn(chn, 1);
+			}
 			for (i = 0; i < CHN_COUNT; i++)
 			{
 				videoEncoder.startRecvStream(chn[i]);

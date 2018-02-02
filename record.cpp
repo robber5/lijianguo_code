@@ -940,88 +940,86 @@ int gpio_test_out(unsigned int gpio_chip_num, unsigned int gpio_offset_num, int 
         fclose(fp);
         return 0;
 }
-#if 0
-#if 1
-static void *record_listen_cmd_thread(void *p)
+
+static void *record_listen_cmd_host_thread(void *p)
 {
-	int status_cur = 0, status_bef = 0, count = 0;
+	int status_cur = 0, status_bef = 0;
 	ConfigManager& config = *ConfigManager::instance();
-	const bool toSave = false;
 
 	Json::Value recCfg, response;
 
+	//status_cur = gpio_test_in(4,2);
+	gpio_test_out(7,5,0);
+	status_bef = status_cur;
 	while (s_record_enable_flag)
 	{
-		status_cur = gpio_test_in(4,2);
-		if ((0 == status_cur) && (1 == status_bef))
+		//status_cur = gpio_test_in(4,2);
+		if (status_cur != status_bef)
 		{
-			count = !count;
-			if(count)
+			config.getTempConfig("record.status.value", recCfg, response);
+			if (!(recCfg.asString()).compare("stop"))
 			{
-				gpio_test_out(7,5,0);
-				config.getConfig("record.status.value", recCfg, response);
+				gpio_test_out(7,5,1);
 				recCfg = "start";
-				config.setConfig("record.status.value", recCfg, response, toSave);
+				config.setTempConfig("record.status.value", recCfg, response);
 			}
 			else
 			{
 				gpio_test_out(7,5,0);
-				config.getConfig("record.status.value", recCfg, response);
 				recCfg = "stop";
-				config.setConfig("record.status.value", recCfg, response, toSave);
+				config.setTempConfig("record.status.value", recCfg, response);
 			}
 		}
 		status_bef = status_cur;
-		usleep(10*1000);
-		gpio_test_in(7,5);
-		gpio_test_in(7,5);
-		usleep(10*1000);
 	}
 
 	return (void *)S_OK;
 }
-#else
-static void *record_listen_cmd_thread(void *p)
+
+static void *record_listen_cmd_slave_thread(void *p)
 {
-	int status_cur = 1, status_bef = 1, count = 0;
+	int status_cur = 0, status_bef = 0, count = 0;
 	ConfigManager& config = *ConfigManager::instance();
-	const bool toSave = false;
 
 	Json::Value recCfg, response;
 
+	//status_cur = gpio_test_in(7,5);
+	//status_bef = status_cur;
 	while (s_record_enable_flag)
 	{
-		gpio_test_in(7,5);
-		status_cur = gpio_test_in(7,5);
-		if ((0 == status_cur) && (1 == status_bef))
+		if (status_cur != status_bef)
 		{
 				count = !count;
 				if(count)
 				{
-					printf("start\n");
-					config.getConfig("record.status.value", recCfg, response);
+					config.getTempConfig("record.status.value", recCfg, response);
 					recCfg = "start";
-					config.setConfig("record.status.value", recCfg, response, toSave);
+					config.setTempConfig("record.status.value", recCfg, response);
 				}
 				else
 				{
-					config.getConfig("record.status.value", recCfg, response);
+					config.getTempConfig("record.status.value", recCfg, response);
 					recCfg = "stop";
-					config.setConfig("record.status.value", recCfg, response, toSave);
+					config.setTempConfig("record.status.value", recCfg, response);
 				}
 		}
 		status_bef = status_cur;
+		status_cur = gpio_test_in(7,5);
 		usleep(10*1000);
 	}
 	return (void *)S_OK;
 
 }
-#endif
-#endif
+
 static S_Result record_thread_create(void)
 {
 //	pthread_attr_t attr1,attr2;
 //	struct sched_param param;
+	ConfigManager& config = *ConfigManager::instance();
+
+	Json::Value chipCfg, response;
+
+	config.getConfig("chip.type.value", chipCfg, response);
 
 	if (S_OK != record_framelist_init())
 	{
@@ -1064,15 +1062,26 @@ static S_Result record_thread_create(void)
 		return S_ERROR;
 	}
 	pthread_setname_np(s_p_record_thd_param->fpid, "recf\0");
-#if 0
-	if (0 != pthread_create(&s_p_record_thd_param->lpid, NULL, record_listen_cmd_thread, NULL))
+	if (0 == chipCfg.asString().compare("host"))
 	{
-		perror("pthread_create failed");
-		printf("pthread_create flush cache thread failed\n");
-		return S_ERROR;
+		if (0 != pthread_create(&s_p_record_thd_param->lpid, NULL, record_listen_cmd_host_thread, NULL))
+		{
+			perror("pthread_create failed");
+			printf("pthread_create flush cache thread failed\n");
+			return S_ERROR;
+		}
+	}
+	else
+	{
+		if (0 != pthread_create(&s_p_record_thd_param->lpid, NULL, record_listen_cmd_slave_thread, NULL))
+		{
+			perror("pthread_create failed");
+			printf("pthread_create flush cache thread failed\n");
+			return S_ERROR;
+		}
+
 	}
 	pthread_setname_np(s_p_record_thd_param->lpid, "recl\0");
-#endif
 	return S_OK;
 
 }
@@ -1366,13 +1375,13 @@ static S_Result record_thread_destroy(void)
 		pthread_join(s_p_record_thd_param->fpid, 0);
 		s_p_record_thd_param->fpid = PID_NULL;
 	}
-#if 0
+
 	if (s_p_record_thd_param->lpid != PID_NULL)
 	{
 		pthread_join(s_p_record_thd_param->lpid, 0);
 		s_p_record_thd_param->lpid = PID_NULL;
 	}
-#endif
+
 	record_framelist_destroy();
 
 	return S_OK;
@@ -1401,13 +1410,16 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 		{
 			if (THD_STAT_STOP == newcfg.thd_stat)
 			{
+				gpio_test_out(7,5,0);
 				record_thread_stop();
 				break;
 			}
 			else
 			{
+				gpio_test_out(7,5,1);
 				if (S_ERROR == record_thread_start(newcfg))
 				{
+					gpio_test_out(7,5,0);
 					config.getTempConfig("record.status.value", reccfg, response);
 					reccfg = "stop";
 					config.setTempConfig("record.status.value", reccfg, response);
