@@ -971,6 +971,7 @@ static void *record_listen_cmd_host_thread(void *p)
 			}
 		}
 		status_bef = status_cur;
+		usleep(10*1000);
 	}
 
 	return (void *)S_OK;
