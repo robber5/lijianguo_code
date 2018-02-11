@@ -567,6 +567,10 @@ static void *record_get_frame_thread(void *p)
 						framelist_node = s_framelist_node[index];
 						packet = framelist_node->frame + framelist_node->gopsize;
 						packetSize = PACKET_SIZE_MAX - framelist_node->gopsize;
+						if (0 == start_time[index])
+						{
+							videoEncoder.requestIDR(chn[index]);
+						}
 						if (-1 == videoEncoder.getStream(chn[index], seq[index], packet, packetSize, pts))
 						{
 							record_add_gop(framelist_node);
