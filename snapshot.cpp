@@ -16,12 +16,18 @@
 #include "record_search.h"
 #include "config_manager.h"
 #include "media.h"
+#include "video_processor.h"
+#include "video_input.h"
+#include "Detu_AlgSrMain.h"
+#include "jpeg_encoder.h"
 
 using namespace detu_config_manager;
 using namespace detu_media;
 
 #define TRUE 1
 #define FALSE 0
+#define PACKET_SIZE_MAX (10*1024*1024)
+#define PACKET_YUV_SIZE_MAX (15*1024*1024)
 
 typedef enum
 {
@@ -30,6 +36,21 @@ typedef enum
 	THD_STAT_QUIT,
 	THD_STAT_MAX,
 } THD_STAT_E;
+
+typedef enum
+{
+	SAVE_2DFILE_OFF,
+	SAVE_2DFILE_ON,
+	SAVE_2DFILE_MAX,
+} SAVE_2DFILE_E;
+
+typedef enum
+{
+	SAVE_SOURCEFILE_OFF,
+	SAVE_SOURCEFILE_ON,
+	SAVE_SOURCEFILE_MAX,
+} SAVE_SOURCEFILE_E;
+
 
 typedef enum
 {
@@ -66,22 +87,38 @@ typedef struct snapshot_cond_s
 	int				finish;
 }SNAPSHOT_COND_S;
 
+typedef struct snapshot_res_s
+{
+	Uint32_t height;
+	Uint32_t width;
+}SNAPSHOT_RES_S;
+
 typedef struct snapshot_config
 {
 	unsigned int delay_time; //延时录像时间
 	THD_STAT_E thd_stat;
 	unsigned int chn;
 	SNAPSHOT_MODE_E snapshot_mode;
+	SAVE_SOURCEFILE_E save_sourcefile;
+	SAVE_2DFILE_E save_2dfile;
+	SNAPSHOT_RES_S resolution;
+	Uint32_t enlarge_factor;
+	Uint32_t media_wkmode;
+	Uint32_t capture_effect;
 
 } SNAPSHOT_USER_CONFIG_S;
 
 typedef struct snapshot_params
 {
-//	EXPOSURE_MODE_E exposure_mode; //曝光模式
-//	EXPOSURE_TIME_E exposure_time; //曝光时长
 	SNAPSHOT_MODE_E snapshot_mode; //拍照模式；单拍，连拍
+	Uint32_t media_wkmode;
 	unsigned int delay_time; //延时拍照
 	unsigned int chn;//抓图通道
+	SAVE_SOURCEFILE_E save_sourcefile;
+	SAVE_2DFILE_E save_2dfile;
+	SNAPSHOT_RES_S resolution;
+	Uint32_t enlarge_factor;
+	Uint32_t capture_effect;
 	pthread_t           pid;
 	volatile THD_STAT_E thd_stat;
 	sem_t               wake_sem;//拍照开关信号量
@@ -90,9 +127,41 @@ typedef struct snapshot_params
 
 } SNAPSHOT_PARAMS_S, *p_snapshot_thread_params_s;
 
+/*
+typedef struct snapshot_pic_packet_s
+{
+	Uint32_t packet_cur_index;
+	Uint32_t packet_size;
+	Uint32_t *packet_index_size;
+	Int32_t *packet_chn_index;
+	Uint8_t *packet;
+} SNAPSHOT_PIC_PACKET_S;
+*/
+typedef struct snapshot_pic_chn_s
+{
+	Int32_t chn;
+	Int32_t fd;
+	Uint32_t packet_size;
+	Uint32_t chn_status;//1:stop,0:start
+	char filename[FILE_NAME_LEN_MAX];
+	Uint8_t *packet;
+} SNAPSHOT_PIC_CHN_S;
+
+typedef struct snapshot_pic_s
+{
+	Int32_t chn_num;
+	SNAPSHOT_PIC_CHN_S *pic_chn;
+}SNAPSHOT_PIC_S;
+
 
 static int snapshot_enable_flag = TRUE;
 static p_snapshot_thread_params_s p_gs_snapshot_thd_param;
+static SNAPSHOT_PIC_S *p_s_snapshot_pic_st;
+static SNAPSHOT_PIC_CHN_S *p_s_snapshot_pic_chn_st;
+
+static VideoEncodeMgr& s_videoEncoder = *VideoEncodeMgr::instance();
+static VideoProcMgr& s_videoprocessor = *VideoProcMgr::instance();
+static VideoInputMgr& s_videoinput = *VideoInputMgr::instance();
 
 #define VALUE "value"
 #define SNAPSHOT_M "snapshot"
@@ -100,22 +169,30 @@ static p_snapshot_thread_params_s p_gs_snapshot_thd_param;
 #define DELAY_TIME "delay_time"
 #define PIC_CHN "chn"
 #define SNAPSHOT_MODE "snapshot_mode"
+#define RESOLUTION "resolution"
+#define SAVE_SOURCEFILE "save_sourcefile"
+#define SAVE_2DFILE "save_2dfile"
+#define ENLARGE_FACTOR "enlarge_factor"
+#define ORIGINAL_RES "original_res"
 
 #define CHN_COUNT 6
 #define CHN_NUM_MAX 7
 
-#define PACKET_SIZE_MAX (10*1024*1024)
 
 static char s_snapshot_status[THD_STAT_MAX][16] = {"start", "stop", "quit"};
 static char s_snapshot_mode[SNAPSHOT_MODE_MAX][16] = {"single", "series"};
-static char s_snapshot_chn[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_1080P, ALLCHN};
+static char s_snapshot_chn[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_1080P, AVS_VIDEO_DIR, ALLCHN};
 
 static char s_picture_dir[CHN_COUNT][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
-
+static char s_save_sourcefile[SAVE_SOURCEFILE_MAX][16] = {"off", "on"};
+static char s_save_2dfile[SAVE_2DFILE_MAX][16] = {"off", "on"};
 
 #define PID_NULL			((pthread_t)(-1))
 
 #define PIC_COUNT_MIN 35
+
+#define ORIGINAL_CHN_NUM 4
+#define AVS_CHN_COUNT 2
 
 static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg);
 
@@ -127,79 +204,389 @@ static S_Result snapshot_get_jpeg_filename(char *filename, int index)
 	struct tm local_time;
 	localtime_r(&time_seconds, &local_time);
 
-	snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d-%s.jpg", MOUNT_DIR, s_picture_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
-		local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec, s_snapshot_chn[index]);
-
-	return S_OK;
-}
-
-static S_Result snapshot_set_chn(Uint32_t *chn, Uint32_t mode)
-{
-	if (1 == mode)
+	if (0 == p_gs_snapshot_thd_param->capture_effect)
 	{
-		chn[0] = CHN0_PIPE0_4K3K;
-		chn[1] = CHN1_PIPE1_4K3K;
-		chn[2] = CHN2_PIPE2_4K3K;
-		chn[3] = CHN3_PIPE3_4K3K;
-		chn[4] = CHN4_AVS_4K3K;
-		chn[5] = CHN5_AVS_1080P;
+		if (SAVE_SOURCEFILE_OFF == p_gs_snapshot_thd_param->save_sourcefile)
+		{
+			index += ORIGINAL_CHN_NUM;
+		}
+		snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d-%s.jpg", MOUNT_DIR, s_picture_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
+					local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec, s_snapshot_chn[index]);
 	}
 	else
 	{
-		chn[0] = CHN8_PIPE0_JPEG;
-		chn[1] = CHN9_PIPE1_JPEG;
-		chn[2] = CHN10_PIPE2_JPEG;
-		chn[3] = CHN11_PIPE3_JPEG;
-		chn[4] = CHN14_AVS_JEPG;
-		chn[5] = CHN17_AVS_JEPG_1080P;
+		index += ORIGINAL_CHN_NUM;
+		snprintf(filename, FILE_NAME_LEN_MAX, "%s%s/%d%02d%02d%02d%02d%02d-%s.jpg", MOUNT_DIR, s_picture_dir[index], local_time.tm_year + 1900, local_time.tm_mon + 1,
+							local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec, s_snapshot_chn[index]);
+	}
+
+	return S_OK;
+}
+
+static S_Result snapshot_set_chn()
+{
+	SNAPSHOT_PIC_CHN_S *pic_chn = p_s_snapshot_pic_chn_st;
+
+	if (0 == p_gs_snapshot_thd_param->capture_effect)
+	{
+		if (SAVE_SOURCEFILE_OFF == p_gs_snapshot_thd_param->save_sourcefile)
+		{
+			if (1 == p_gs_snapshot_thd_param->enlarge_factor)
+			{
+				if (1 == p_gs_snapshot_thd_param->media_wkmode)
+				{
+					pic_chn[0].chn = CHN5_AVS_1080P;
+					pic_chn[1].chn = CHN4_AVS_4K3K;
+				}
+				else
+				{
+					pic_chn[0].chn = CHN17_AVS_JEPG_1080P;
+					pic_chn[1].chn = CHN14_AVS_JEPG;
+				}
+			}
+			else
+			{
+				if (1 == p_gs_snapshot_thd_param->media_wkmode)
+				{
+					pic_chn[0].chn = CHN4_AVS_4K3K;
+					pic_chn[1].chn = CHN4_AVS_4K3K;
+				}
+				else
+				{
+					pic_chn[0].chn = CHN14_AVS_JEPG;
+					pic_chn[1].chn = CHN14_AVS_JEPG;
+				}
+			}
+		}
+		else
+		{
+			if (1 == p_gs_snapshot_thd_param->media_wkmode)
+			{
+				pic_chn[0].chn = CHN0_PIPE0_4K3K;
+				pic_chn[1].chn = CHN1_PIPE1_4K3K;
+				pic_chn[2].chn = CHN2_PIPE2_4K3K;
+				pic_chn[3].chn = CHN3_PIPE3_4K3K;
+				pic_chn[4].chn = CHN5_AVS_1080P;
+				pic_chn[5].chn = CHN4_AVS_4K3K;
+			}
+			else
+			{
+				pic_chn[0].chn = CHN8_PIPE0_JPEG;
+				pic_chn[1].chn = CHN9_PIPE1_JPEG;
+				pic_chn[2].chn = CHN10_PIPE2_JPEG;
+				pic_chn[3].chn = CHN11_PIPE3_JPEG;
+				pic_chn[4].chn = CHN17_AVS_JEPG_1080P;
+				pic_chn[5].chn = CHN14_AVS_JEPG;
+			}
+		}
+	}
+	else
+	{
+		// 3D todo;
+	}
+
+	return S_OK;
+}
+
+static S_Result snapshot_set_chn_num()
+{
+
+	if (0 == p_gs_snapshot_thd_param->capture_effect)
+	{
+		if (SAVE_SOURCEFILE_OFF == p_gs_snapshot_thd_param->save_sourcefile)
+		{
+			p_s_snapshot_pic_st->chn_num = AVS_CHN_COUNT;
+		}
+		else
+		{
+			p_s_snapshot_pic_st->chn_num = CHN_COUNT;
+		}
+
+	}
+	else
+	{
+		// 3D todo;
 	}
 
 	return S_OK;
 }
 
 
-static int get_max_fd(int *fd, int num)
+static int get_max_fd()
 {
-	int i, fd_max = -1;
+	int i, fd_max = -1, num;
+	SNAPSHOT_PIC_CHN_S *pic_chn;
+	num = p_s_snapshot_pic_st->chn_num;
+	pic_chn = p_s_snapshot_pic_st->pic_chn;
 	for (i = 0; i < num; i++)
 	{
-		if (fd[i] >= fd_max)
+		if (pic_chn[i].fd >= fd_max)
 		{
-			fd_max = fd[i];
+			fd_max = pic_chn[i].fd;
 		}
 	}
 
 	return fd_max;
 }
 
+static void snapshot_sr_consult(Uint8_t *packet_in, char *filename)
+{
+	Uint32_t width_in, height_in;
+	Uint32_t width_out, height_out;
+	Uint32_t size;
+	Uint8_t *packet_out;
+//	FILE *fp = NULL;
+
+	height_in = p_gs_snapshot_thd_param->resolution.height;
+	width_in = p_gs_snapshot_thd_param->resolution.width;
+	height_out = p_gs_snapshot_thd_param->resolution.height * p_gs_snapshot_thd_param->enlarge_factor;
+	width_out = p_gs_snapshot_thd_param->resolution.width * p_gs_snapshot_thd_param->enlarge_factor;
+	//size = height_in * width_in * 3/2;
+	size = height_out * width_out * 3/2;
+	packet_out = (Uint8_t *)malloc(size * sizeof(Uint8_t));
+
+	Detu_AlgSrRun(packet_in, width_in, height_in, packet_out, width_out, height_out);
+
+
+	yuv_encode_to_jpeg(filename, packet_out, width_out, height_out);
+
+}
+
+static void snapshot_get_stream_fd()
+{
+	int chn_num = 0, i = 0;
+	SNAPSHOT_PIC_CHN_S *pic_chn = p_s_snapshot_pic_chn_st;
+	if (0 == p_gs_snapshot_thd_param->capture_effect)
+	{
+		chn_num = p_s_snapshot_pic_st->chn_num;
+
+		if (1 == p_gs_snapshot_thd_param->enlarge_factor)
+		{
+
+			for (i = 0; i < chn_num; i++)
+			{
+				s_videoEncoder.getFd(pic_chn[i].chn, pic_chn[i].fd);
+			}
+		}
+		else
+		{
+			chn_num--;
+			for (i = 0; i < chn_num; i++)
+			{
+				s_videoEncoder.getFd(pic_chn[i].chn, pic_chn[i].fd);
+			}
+			pic_chn[i].fd = pic_chn[i-1].fd;
+		}
+	}
+	else
+	{
+		//3D todo;
+	}
+
+}
+
+static void snapshot_stop_stream(SNAPSHOT_PIC_CHN_S *pic_chn)
+{
+	int i = 0;
+	Int32_t chn_num;
+	if (0 == p_gs_snapshot_thd_param->capture_effect)
+	{
+
+		chn_num = p_s_snapshot_pic_st->chn_num;
+
+		if (1 == p_gs_snapshot_thd_param->enlarge_factor)
+		{
+
+			for (i = 0; i < chn_num; i++)
+			{
+				s_videoEncoder.stopRecvStream(pic_chn[i].chn);
+			}
+		}
+		else
+		{
+			chn_num--;
+			for (i = 0; i < chn_num; i++)
+			{
+				s_videoEncoder.stopRecvStream(pic_chn[i].chn);
+			}
+		}
+
+	}
+	else
+	{
+		//3D todo;
+	}
+
+}
+
+static void snapshot_start_stream()
+{
+	int i = 0;
+	Int32_t chn_num;
+	SNAPSHOT_PIC_CHN_S *pic_chn = p_s_snapshot_pic_chn_st;
+
+	if (0 == p_gs_snapshot_thd_param->capture_effect)
+	{
+		if (SAVE_SOURCEFILE_OFF == p_gs_snapshot_thd_param->save_sourcefile)
+		{
+			chn_num = AVS_CHN_COUNT;
+		}
+		else
+		{
+			chn_num = CHN_COUNT;
+		}
+		if (1 == p_gs_snapshot_thd_param->enlarge_factor)
+		{
+
+			for (i = 0; i < chn_num; i++)
+			{
+				s_videoEncoder.startRecvStream(pic_chn[i].chn);
+			}
+		}
+		else
+		{
+			chn_num--;
+			for (i = 0; i < chn_num; i++)
+			{
+				s_videoEncoder.startRecvStream(pic_chn[i].chn);
+			}
+		}
+
+	}
+	else
+	{
+		//3D todo;
+	}
+
+
+}
+
+
+static S_Result snapshot_get_stream(SNAPSHOT_PIC_CHN_S &pic_chn, int32_t chn_index, Uint32_t flag)
+{
+	Uint8_t *packet = NULL;
+	Uint64_t pts;
+	Uint32_t seq;
+	Uint32_t packetSize;
+
+	if ((0 == pic_chn.chn_status) && (TRUE == flag))
+	{
+		packet = pic_chn.packet;
+		packetSize = PACKET_SIZE_MAX;
+	}
+	else
+	{
+		packet = NULL;
+		packetSize = 0;
+	}
+	if (chn_index == (p_s_snapshot_pic_st->chn_num - 1))
+	{
+		if (NULL != packet)
+		{
+			Yuv yuv;
+			yuv.data = packet;
+			yuv.size = PACKET_YUV_SIZE_MAX;
+			if (S_ERROR == s_videoprocessor.GetChnFrame(0, 0, yuv))
+			{
+				return S_ERROR;
+			}
+			packetSize = yuv.size;
+		}
+	}
+	else
+	{
+		if (S_ERROR == s_videoEncoder.getStream(pic_chn.chn, seq, packet, packetSize, pts))
+		{
+			return S_ERROR;
+		}
+
+	}
+	if ((0 == pic_chn.chn_status) && (TRUE == flag))
+	{
+			pic_chn.packet_size = packetSize;
+	}
+
+	return S_OK;
+
+}
+
+
+static void snapshot_save_pic_to_sdcard()
+{
+	FILE *fp = NULL;
+	int i = 0;
+	SNAPSHOT_PIC_CHN_S *pic_chn = p_s_snapshot_pic_chn_st;
+	for (i = 0; i < p_s_snapshot_pic_st->chn_num; i++)
+	{
+
+		if (i == (p_s_snapshot_pic_st->chn_num - 1))
+		{
+			snapshot_sr_consult(pic_chn[i].packet, pic_chn[i].filename);
+		}
+		else
+		{
+			if (NULL == (fp = fopen(pic_chn[i].filename, "wb")))
+			{
+				printf("can not open jpeg file:%s\n", pic_chn[i].filename);
+			}
+			fwrite(pic_chn[i].packet, sizeof(Uint8_t), pic_chn[i].packet_size, fp);
+			fflush(fp);
+			fclose(fp);
+			printf("create file:%s, packet_size:%d, chn_index:%d\n", pic_chn[i].filename, pic_chn[i].packet_size, i);
+		}
+	}
+
+
+}
+
+static void snapshot_pics_alloc(SNAPSHOT_PIC_S *pics)
+{
+	int i = 0;
+	if (NULL == pics->pic_chn)
+	{
+		pics->pic_chn = (SNAPSHOT_PIC_CHN_S *)malloc((pics->chn_num-1) * sizeof(SNAPSHOT_PIC_CHN_S));
+		memset(pics->pic_chn, 0, pics->chn_num * sizeof(SNAPSHOT_PIC_CHN_S));
+		if (NULL != pics->pic_chn)
+		{
+			p_s_snapshot_pic_chn_st = pics->pic_chn;
+			for (i = 0; i < (pics->chn_num - 1); i++)
+			{
+				pics->pic_chn[i].packet = (Uint8_t *)malloc(PACKET_SIZE_MAX * sizeof(pics->chn_num));
+			}
+			pics->pic_chn[i].packet = (Uint8_t *)malloc(PACKET_YUV_SIZE_MAX * sizeof(pics->chn_num));
+		}
+	}
+}
+
+static void snapshot_pics_free(SNAPSHOT_PIC_S *pics)
+{
+	int i = 0;
+	if (NULL != pics->pic_chn)
+	{
+		for (i = 0; i < pics->chn_num; i++)
+		{
+			free(pics->pic_chn[i].packet);
+		}
+		free(pics->pic_chn);
+		pics->pic_chn = NULL;
+		p_s_snapshot_pic_chn_st = NULL;
+	}
+	memset(pics, 0, sizeof(SNAPSHOT_PIC_S));
+}
+
 static void *snapshot_thread(void *p)
 {
-	ConfigManager& config = *ConfigManager::instance();
-
-	Json::Value mediaCfg, response;
-
 	Uint32_t pic_count = 0;
 	fd_set inputs, testfds;
 	struct timeval timeout;
 	int result = 0;
-	Uint8_t *packet = NULL;
-	Uint32_t packetSize = PACKET_SIZE_MAX;
-	Uint64_t pts;
-	int fd[CHN_COUNT];
 	int fd_found[CHN_COUNT];
-	Uint32_t chn[CHN_COUNT];
-	Uint32_t chnnum = 0;
 	Uint32_t index = 0;
-	Uint32_t seq = 0u;
-	char filename[FILE_NAME_LEN_MAX];
-	FILE *fp = NULL;
-	Uint32_t remain_chn_num = 0, i = 0, j = 0;
+	Uint32_t remain_chn_num = 0;
+	int i = 0, j = 0;
 	int fd_max = -1;
-	int chn_status[CHN_COUNT] = {0};//0:stop,1:start
-
-	packet = (Uint8_t *)malloc(PACKET_SIZE_MAX*sizeof(Uint8_t));
-	memset(packet, 0, PACKET_SIZE_MAX);
-	VideoEncodeMgr& videoEncoder = *VideoEncodeMgr::instance();
+	//int chn_status[CHN_COUNT] = {0};//0:stop,1:start
+	SNAPSHOT_PIC_CHN_S *pic_chn;
 
 	while (snapshot_enable_flag)
 	{
@@ -229,42 +616,18 @@ static void *snapshot_thread(void *p)
 		}
 
 		sleep(p_gs_snapshot_thd_param->delay_time);
-		chnnum = p_gs_snapshot_thd_param->chn;
-		if (CHN_COUNT > chnnum)
+		snapshot_set_chn_num();
+		snapshot_pics_alloc(p_s_snapshot_pic_st);
+		snapshot_set_chn();
+		snapshot_get_stream_fd();
+		snapshot_start_stream();
+		fd_max = get_max_fd();
+		pic_chn = p_s_snapshot_pic_st->pic_chn;
+		for (i = 0; i < (p_s_snapshot_pic_st->chn_num -1); i++)
 		{
-			chn[0] = chnnum;
-			videoEncoder.startRecvStream(chn[0]);
-			videoEncoder.getFd(chn[0], fd[0]);
-			FD_ZERO(&inputs);
-			FD_SET(fd[0],&inputs);
-			remain_chn_num = 1;
-			fd_max = fd[0];
-			chn_status[0] = 1;
+			FD_SET(pic_chn[i].fd, &inputs);
 		}
-		else
-		{
-			FD_ZERO(&inputs);
-			config.getTempConfig("media.mode.value", mediaCfg, response);
-			printf("snapmode:%d\n", mediaCfg.asInt());
-			if (0 == mediaCfg.asInt())
-			{
-				snapshot_set_chn(chn, 0);
-			}
-			else
-			{
-				snapshot_set_chn(chn, 1);
-			}
-			for (i = 0; i < CHN_COUNT; i++)
-			{
-				videoEncoder.startRecvStream(chn[i]);
-				videoEncoder.getFd(chn[i], fd[i]);
-				FD_SET(fd[i],&inputs);
-				chn_status[i] = 1;
-			}
-			remain_chn_num = CHN_COUNT;
-			fd_max = get_max_fd(fd, CHN_COUNT);
-			printf("start allchn\n");
-		}
+		remain_chn_num = p_s_snapshot_pic_st->chn_num;
 
 		while (THD_STAT_START == p_gs_snapshot_thd_param->thd_stat)
 		{
@@ -281,9 +644,9 @@ static void *snapshot_thread(void *p)
 					perror("select");
 					break;
 				default:
-					for (i = 0, j = 0; i < CHN_COUNT; i++)
+					for (i = 0, j = 0; i < p_s_snapshot_pic_st->chn_num; i++)
 					{
-						if (FD_ISSET(fd[i],&testfds))
+						if (FD_ISSET(pic_chn[i].fd,&testfds))
 						{
 							fd_found[j] = i;
 							j++;
@@ -298,42 +661,37 @@ static void *snapshot_thread(void *p)
 					for (i = 0; i < j; i++)
 					{
 						index = fd_found[i];
-						packetSize = PACKET_SIZE_MAX;
-						videoEncoder.getStream(chn[index], seq, packet, packetSize, pts);
-
 						if (PIC_COUNT_MIN > pic_count)
 						{
 							if (0 == index)
 							{
 								pic_count++;
 							}
+							snapshot_get_stream(pic_chn[index], index, FALSE);
 							continue;
 						}
-						else if (0 == chn_status[index])
+						else if (1 == pic_chn[index].chn_status)
 						{
+							snapshot_get_stream(pic_chn[index], index, FALSE);
 							continue;
 						}
-						snapshot_get_jpeg_filename(filename, index);
+						if(S_ERROR == snapshot_get_stream(pic_chn[index], index, TRUE))
+						{
+							printf("get pic failed\n");
+							continue;
+						}
+
+						snapshot_get_jpeg_filename(pic_chn[index].filename, index);
 						if ((SNAPSHOT_MODE_SINGLE == p_gs_snapshot_thd_param->snapshot_mode) && (0 < remain_chn_num))
 						{
-							//todo 写入sd卡
-							if (NULL == (fp = fopen(filename, "wb")))
-							{
-								printf("can not open jpeg file:%s\n", filename);
-								break;
-							}
-							fwrite(packet, sizeof(char), packetSize, fp);
 							printf("remain chn:%d\n", remain_chn_num);
-							printf("create file:%s\n", filename);
-							fflush(fp);
-							fclose(fp);
-							FD_CLR(fd[index],&inputs);
-							videoEncoder.stopRecvStream(chn[index]);
-							chn_status[index] = 0;
+							pic_chn[index].chn_status = 1;
 							--remain_chn_num;
 							if (0 == remain_chn_num)
 							{
+								snapshot_stop_stream(pic_chn);
 								FD_ZERO(&inputs);
+								snapshot_save_pic_to_sdcard();
 								pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 								if (FALSE == p_gs_snapshot_thd_param->snapshot_cond.wake)
 								{
@@ -363,27 +721,11 @@ static void *snapshot_thread(void *p)
 		if (THD_STAT_START != p_gs_snapshot_thd_param->thd_stat)//退出拍照模式
 		{
 			pic_count = 0;
-			if (CHN_COUNT > chnnum)
+			if (SNAPSHOT_MODE_SERIES == p_gs_snapshot_thd_param->snapshot_mode)
 			{
-				if (1 == chn_status[0])
-				{
-					videoEncoder.stopRecvStream(chn[0]);
-				}
+				snapshot_stop_stream(pic_chn);
 			}
-			else
-			{
-				for (i = 0; i < CHN_COUNT; i++)
-				{
-
-					if (1 == chn_status[i])
-					{
-						videoEncoder.stopRecvStream(chn[i]);
-					}
-
-				}
-
-			}
-
+			snapshot_pics_free(p_s_snapshot_pic_st);
 			pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 			if (TRUE == p_gs_snapshot_thd_param->snapshot_cond.wake)
 			{
@@ -395,13 +737,14 @@ static void *snapshot_thread(void *p)
 
 	}
 
-	free(packet);
+	snapshot_pics_free(p_s_snapshot_pic_st);
 
 	return (void *)S_OK;
 }
 
 static S_Result snapshot_trans_config(const Json::Value& config,SNAPSHOT_USER_CONFIG_S& usercfg)
 {
+
 	int i = 0;
 
 	if (config.isMember(SNAPSHOT_STATUS) && config[SNAPSHOT_STATUS].isMember(VALUE))
@@ -437,9 +780,59 @@ static S_Result snapshot_trans_config(const Json::Value& config,SNAPSHOT_USER_CO
 			}
 		}
 	}
+#if 1
+	if (config.isMember(SAVE_2DFILE))
+	{
+		for (i = 0; i < SAVE_2DFILE_MAX; i++)
+		{
+			if (!(config[SAVE_2DFILE][VALUE].asString()).compare(s_save_2dfile[i]))
+			{
+				usercfg.save_2dfile = (SAVE_2DFILE_E)i;
+				break;
+			}
+		}
+	}
+
+	if (config.isMember(SAVE_SOURCEFILE))
+	{
+		for (i = 0; i < SAVE_SOURCEFILE_MAX; i++)
+		{
+			if (!(config[SAVE_SOURCEFILE][VALUE].asString()).compare(s_save_sourcefile[i]))
+			{
+				usercfg.save_sourcefile = (SAVE_SOURCEFILE_E)i;
+				break;
+			}
+		}
+	}
+#else
+	if (config.isMember(SAVE_2DFILE))
+	{
+		usercfg.save_2dfile = (SAVE_2DFILE_E)config[SAVE_2DFILE][VALUE].asUInt();
+
+	}
+	if (config.isMember(SAVE_SOURCEFILE))
+	{
+		usercfg.save_sourcefile = (SAVE_SOURCEFILE_E)config[SAVE_SOURCEFILE][VALUE].asUInt();
+	}
+#endif
 	if (config.isMember(DELAY_TIME))
 	{
 		usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
+	}
+
+	if (config.isMember(RESOLUTION))
+	{
+		usercfg.resolution.width = config[RESOLUTION][VALUE][ORIGINAL_RES][0].asUInt();
+		usercfg.resolution.height = config[RESOLUTION][VALUE][ORIGINAL_RES][1].asUInt();
+		usercfg.enlarge_factor = config[RESOLUTION][VALUE][ENLARGE_FACTOR].asUInt();
+	}
+	if (config.isMember("mode"))
+	{
+		usercfg.media_wkmode = config["mode"][VALUE].asUInt();
+	}
+	if (config.isMember("capture_effect"))
+	{
+		usercfg.capture_effect = config["capture_effect"][VALUE].asUInt();
 	}
 
 	return S_OK;
@@ -457,7 +850,7 @@ static S_Result snapshot_check_config(const Json::Value& config)
 	{
 		delay_time = config[DELAY_TIME][VALUE].asInt();
 	}
-	printf("config:%s\n", config.toStyledString().c_str());
+	//printf("config:%s\n", config.toStyledString().c_str());
 	do
 	{
 		if (config.isMember(SNAPSHOT_STATUS) && config[SNAPSHOT_STATUS].isMember(VALUE))
@@ -508,6 +901,44 @@ static S_Result snapshot_check_config(const Json::Value& config)
 				break;
 			}
 		}
+#if 1
+		if (config.isMember(SAVE_SOURCEFILE))
+		{
+			for (i = 0; i < SAVE_SOURCEFILE_MAX; i++)
+			{
+				if (!(config[SAVE_SOURCEFILE][VALUE].asString()).compare(s_save_sourcefile[i]))
+				{
+					break;
+				}
+			}
+			if (SAVE_SOURCEFILE_MAX == i)
+			{
+				S_ret = S_ERROR;
+				printf("save_sourcefile error\n");
+				break;
+			}
+		}
+		if (config.isMember(SAVE_2DFILE))
+		{
+			for (i = 0; i < SAVE_2DFILE_MAX; i++)
+			{
+				if (!(config[SAVE_2DFILE][VALUE].asString()).compare(s_save_2dfile[i]))
+				{
+					break;
+				}
+			}
+			if (SAVE_2DFILE_MAX == i)
+			{
+				S_ret = S_ERROR;
+				printf("save_2dfile error\n");
+				break;
+			}
+		}
+#endif
+		if (config.isMember(RESOLUTION))
+		{
+			// todo
+		}
 		if (0 > delay_time)
 		{
 			S_ret = S_ERROR;
@@ -552,6 +983,10 @@ static S_Result snapshot_thread_cb(const void* clientData, const std::string& na
 	config.getConfig(SNAPSHOT_M, snapcfg, response);
 
 	snapshot_trans_config(newConfig, newcfg);
+	snapshot_trans_config(snapcfg, newcfg);
+	config.getConfig("media", snapcfg, response);
+	snapshot_trans_config(snapcfg, newcfg);
+	config.getTempConfig("media", snapcfg, response);
 	snapshot_trans_config(snapcfg, newcfg);
 	snapshot_trans_config(oldConfig, oldcfg);
 
@@ -687,7 +1122,15 @@ static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg)
 		p_gs_snapshot_thd_param->thd_stat = THD_STAT_START;
 		p_gs_snapshot_thd_param->snapshot_mode = usercfg.snapshot_mode;
 		p_gs_snapshot_thd_param->delay_time = usercfg.delay_time;
-		p_gs_snapshot_thd_param->chn = usercfg.chn;
+		//p_gs_snapshot_thd_param->chn = usercfg.chn;
+		p_gs_snapshot_thd_param->capture_effect = usercfg.capture_effect;
+		p_gs_snapshot_thd_param->enlarge_factor = usercfg.enlarge_factor;
+		p_gs_snapshot_thd_param->save_2dfile = usercfg.save_2dfile;
+		p_gs_snapshot_thd_param->save_sourcefile = usercfg.save_sourcefile;
+		p_gs_snapshot_thd_param->resolution.width = usercfg.resolution.width;
+		p_gs_snapshot_thd_param->resolution.height = usercfg.resolution.height;
+		p_gs_snapshot_thd_param->media_wkmode = usercfg.media_wkmode;
+
 		pthread_cond_broadcast(&p_gs_snapshot_thd_param->snapshot_cond.cond);
 		do
 		{
@@ -743,6 +1186,8 @@ static S_Result snapshot_param_init()
 
 	SNAPSHOT_USER_CONFIG_S usercfg;
 
+	memset(&usercfg, 0, sizeof(SNAPSHOT_USER_CONFIG_S));
+
 	config.setTempConfig("snapshot.status.value", "stop", response);
 	config.getTempConfig(SNAPSHOT_M, snapCfg, response);
 	snapshot_trans_config(snapCfg, usercfg);
@@ -751,6 +1196,23 @@ static S_Result snapshot_param_init()
 
 	snapshot_trans_config(snapCfg, usercfg);
 
+	config.getConfig("media", snapCfg, response);
+
+	snapshot_trans_config(snapCfg, usercfg);
+
+	config.getTempConfig("media", snapCfg, response);
+
+	snapshot_trans_config(snapCfg, usercfg);
+
+	p_s_snapshot_pic_st = (SNAPSHOT_PIC_S *)malloc(sizeof(SNAPSHOT_PIC_S));
+	if (NULL == p_s_snapshot_pic_st)
+	{
+		perror("p_s_snapshot_pic_st malloc failed:");
+		printf("record_param_init failed\n");
+		return S_ERROR;
+	}
+	memset(p_s_snapshot_pic_st, 0, sizeof(SNAPSHOT_PIC_S));
+
 	p_gs_snapshot_thd_param = (p_snapshot_thread_params_s)malloc(sizeof(SNAPSHOT_PARAMS_S));
 	if (NULL == p_gs_snapshot_thd_param)
 	{
@@ -758,13 +1220,19 @@ static S_Result snapshot_param_init()
 		printf("record_param_init failed\n");
 		return S_ERROR;
 	}
+
+	p_gs_snapshot_thd_param->media_wkmode = usercfg.media_wkmode;
+	p_gs_snapshot_thd_param->capture_effect = usercfg.capture_effect;
+	p_gs_snapshot_thd_param->save_2dfile = usercfg.save_2dfile;
+	p_gs_snapshot_thd_param->save_sourcefile = usercfg.save_sourcefile;
+	p_gs_snapshot_thd_param->enlarge_factor = usercfg.enlarge_factor;
+	p_gs_snapshot_thd_param->resolution.width = usercfg.resolution.width;
+	p_gs_snapshot_thd_param->resolution.height = usercfg.resolution.height;
 	p_gs_snapshot_thd_param->delay_time = usercfg.delay_time;
 	p_gs_snapshot_thd_param->pid = PID_NULL;
 	p_gs_snapshot_thd_param->thd_stat = usercfg.thd_stat;
-//	p_gs_snapshot_thd_param->exposure_mode = EXPOSURE_MODE_AUTO; //默认自动曝光
-//	p_gs_snapshot_thd_param->exposure_time = EXPOSURE_TIME_AUTO;
 	p_gs_snapshot_thd_param->snapshot_mode = usercfg.snapshot_mode;
-	p_gs_snapshot_thd_param->chn = usercfg.chn;
+	//p_gs_snapshot_thd_param->chn = usercfg.chn;
 	pthread_mutex_init(&p_gs_snapshot_thd_param->mutex, NULL);
 	snapshot_cond_init(&p_gs_snapshot_thd_param->snapshot_cond);
 	//sem_init(&(p_gs_snapshot_thd_param->wake_sem),0,0);//第二个如果不为0代表进程间共享sem，第三个代表sem值的初始值
@@ -786,6 +1254,10 @@ static S_Result snapshot_param_exit()
 	if (NULL != p_gs_snapshot_thd_param)
 	{
 		free(p_gs_snapshot_thd_param);
+	}
+	if (NULL != p_s_snapshot_pic_st)
+	{
+		free(p_s_snapshot_pic_st);
 	}
 
 	return S_OK;
@@ -809,6 +1281,8 @@ static S_Result snapshot_thread_destory()
 
 S_Result snapshot_module_init()
 {
+	Detu_AlgSrCreate();
+	Detu_AlgSrInit();
 	snapshot_param_init();
 	snapshot_register_callback();
 	snapshot_register_validator();
@@ -823,6 +1297,7 @@ S_Result snapshot_module_exit()
 	snapshot_unregister_validator();
 	snapshot_unregister_callback();
 	snapshot_param_exit();
+	Detu_AlgSrDelete();
 
 	return S_OK;
 }
