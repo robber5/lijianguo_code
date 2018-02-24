@@ -97,7 +97,6 @@ typedef struct snapshot_config
 {
 	unsigned int delay_time; //延时录像时间
 	THD_STAT_E thd_stat;
-	unsigned int chn;
 	SNAPSHOT_MODE_E snapshot_mode;
 	SAVE_SOURCEFILE_E save_sourcefile;
 	SAVE_2DFILE_E save_2dfile;
@@ -113,7 +112,6 @@ typedef struct snapshot_params
 	SNAPSHOT_MODE_E snapshot_mode; //拍照模式；单拍，连拍
 	Uint32_t media_wkmode;
 	unsigned int delay_time; //延时拍照
-	unsigned int chn;//抓图通道
 	SAVE_SOURCEFILE_E save_sourcefile;
 	SAVE_2DFILE_E save_2dfile;
 	SNAPSHOT_RES_S resolution;
@@ -181,9 +179,9 @@ static VideoInputMgr& s_videoinput = *VideoInputMgr::instance();
 
 static char s_snapshot_status[THD_STAT_MAX][16] = {"start", "stop", "quit"};
 static char s_snapshot_mode[SNAPSHOT_MODE_MAX][16] = {"single", "series"};
-static char s_snapshot_chn[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_1080P, AVS_VIDEO_DIR, ALLCHN};
+static char s_snapshot_chn[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_1080P, AVS_VIDEO_DIR, "avsSr"};
 
-static char s_picture_dir[CHN_COUNT][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
+static char s_picture_dir[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
 static char s_save_sourcefile[SAVE_SOURCEFILE_MAX][16] = {"off", "on"};
 static char s_save_2dfile[SAVE_2DFILE_MAX][16] = {"off", "on"};
 
@@ -231,32 +229,22 @@ static S_Result snapshot_set_chn()
 	{
 		if (SAVE_SOURCEFILE_OFF == p_gs_snapshot_thd_param->save_sourcefile)
 		{
-			if (1 == p_gs_snapshot_thd_param->enlarge_factor)
+
+			if (1 == p_gs_snapshot_thd_param->media_wkmode)
 			{
-				if (1 == p_gs_snapshot_thd_param->media_wkmode)
-				{
-					pic_chn[0].chn = CHN5_AVS_1080P;
-					pic_chn[1].chn = CHN4_AVS_4K3K;
-				}
-				else
-				{
-					pic_chn[0].chn = CHN17_AVS_JEPG_1080P;
-					pic_chn[1].chn = CHN14_AVS_JEPG;
-				}
+				pic_chn[0].chn = CHN5_AVS_1080P;
+				pic_chn[1].chn = CHN4_AVS_4K3K;
 			}
 			else
 			{
-				if (1 == p_gs_snapshot_thd_param->media_wkmode)
-				{
-					pic_chn[0].chn = CHN4_AVS_4K3K;
-					pic_chn[1].chn = CHN4_AVS_4K3K;
-				}
-				else
-				{
-					pic_chn[0].chn = CHN14_AVS_JEPG;
-					pic_chn[1].chn = CHN14_AVS_JEPG;
-				}
+				pic_chn[0].chn = CHN17_AVS_JEPG_1080P;
+				pic_chn[1].chn = CHN14_AVS_JEPG;
 			}
+			if (1 < p_gs_snapshot_thd_param->enlarge_factor)
+			{
+				pic_chn[2].chn = pic_chn[1].chn;
+			}
+
 		}
 		else
 		{
@@ -277,6 +265,10 @@ static S_Result snapshot_set_chn()
 				pic_chn[3].chn = CHN11_PIPE3_JPEG;
 				pic_chn[4].chn = CHN17_AVS_JEPG_1080P;
 				pic_chn[5].chn = CHN14_AVS_JEPG;
+			}
+			if (1 < p_gs_snapshot_thd_param->enlarge_factor)
+			{
+				pic_chn[6].chn = pic_chn[5].chn;
 			}
 		}
 	}
@@ -300,6 +292,10 @@ static S_Result snapshot_set_chn_num()
 		else
 		{
 			p_s_snapshot_pic_st->chn_num = CHN_COUNT;
+		}
+		if (1 < p_gs_snapshot_thd_param->enlarge_factor)
+		{
+			p_s_snapshot_pic_st->chn_num++;
 		}
 
 	}
@@ -392,23 +388,15 @@ static void snapshot_stop_stream(SNAPSHOT_PIC_CHN_S *pic_chn)
 	if (0 == p_gs_snapshot_thd_param->capture_effect)
 	{
 
-		chn_num = p_s_snapshot_pic_st->chn_num;
+		chn_num = p_s_snapshot_pic_st->chn_num - 1;
 
+		for (i = 0; i < chn_num; i++)
+		{
+			s_videoEncoder.stopRecvStream(pic_chn[i].chn);
+		}
 		if (1 == p_gs_snapshot_thd_param->enlarge_factor)
 		{
-
-			for (i = 0; i < chn_num; i++)
-			{
-				s_videoEncoder.stopRecvStream(pic_chn[i].chn);
-			}
-		}
-		else
-		{
-			chn_num--;
-			for (i = 0; i < chn_num; i++)
-			{
-				s_videoEncoder.stopRecvStream(pic_chn[i].chn);
-			}
+			s_videoEncoder.stopRecvStream(pic_chn[i].chn);
 		}
 
 	}
@@ -427,29 +415,15 @@ static void snapshot_start_stream()
 
 	if (0 == p_gs_snapshot_thd_param->capture_effect)
 	{
-		if (SAVE_SOURCEFILE_OFF == p_gs_snapshot_thd_param->save_sourcefile)
+		chn_num = p_s_snapshot_pic_st->chn_num - 1;
+
+		for (i = 0; i < chn_num; i++)
 		{
-			chn_num = AVS_CHN_COUNT;
-		}
-		else
-		{
-			chn_num = CHN_COUNT;
+			s_videoEncoder.startRecvStream(pic_chn[i].chn);
 		}
 		if (1 == p_gs_snapshot_thd_param->enlarge_factor)
 		{
-
-			for (i = 0; i < chn_num; i++)
-			{
-				s_videoEncoder.startRecvStream(pic_chn[i].chn);
-			}
-		}
-		else
-		{
-			chn_num--;
-			for (i = 0; i < chn_num; i++)
-			{
-				s_videoEncoder.startRecvStream(pic_chn[i].chn);
-			}
+			s_videoEncoder.startRecvStream(pic_chn[i].chn);
 		}
 
 	}
@@ -479,7 +453,7 @@ static S_Result snapshot_get_stream(SNAPSHOT_PIC_CHN_S &pic_chn, int32_t chn_ind
 		packet = NULL;
 		packetSize = 0;
 	}
-	if (chn_index == (p_s_snapshot_pic_st->chn_num - 1))
+	if ((chn_index == (p_s_snapshot_pic_st->chn_num - 1)) && (1 < p_gs_snapshot_thd_param->enlarge_factor))
 	{
 		if (NULL != packet)
 		{
@@ -519,7 +493,7 @@ static void snapshot_save_pic_to_sdcard()
 	for (i = 0; i < p_s_snapshot_pic_st->chn_num; i++)
 	{
 
-		if (i == (p_s_snapshot_pic_st->chn_num - 1))
+		if ((i == (p_s_snapshot_pic_st->chn_num - 1)) && (1 < p_gs_snapshot_thd_param->enlarge_factor))
 		{
 			snapshot_sr_consult(pic_chn[i].packet, pic_chn[i].filename);
 		}
@@ -553,7 +527,15 @@ static void snapshot_pics_alloc(SNAPSHOT_PIC_S *pics)
 			{
 				pics->pic_chn[i].packet = (Uint8_t *)malloc(PACKET_SIZE_MAX * sizeof(pics->chn_num));
 			}
-			pics->pic_chn[i].packet = (Uint8_t *)malloc(PACKET_YUV_SIZE_MAX * sizeof(pics->chn_num));
+			if (1 < p_gs_snapshot_thd_param->enlarge_factor)
+			{
+				pics->pic_chn[i].packet = (Uint8_t *)malloc(PACKET_YUV_SIZE_MAX * sizeof(pics->chn_num));
+			}
+			else
+			{
+				pics->pic_chn[i].packet = (Uint8_t *)malloc(PACKET_SIZE_MAX * sizeof(pics->chn_num));
+
+			}
 		}
 	}
 }
@@ -623,7 +605,11 @@ static void *snapshot_thread(void *p)
 		snapshot_start_stream();
 		fd_max = get_max_fd();
 		pic_chn = p_s_snapshot_pic_st->pic_chn;
-		for (i = 0; i < (p_s_snapshot_pic_st->chn_num -1); i++)
+		for (i = 0; i < (p_s_snapshot_pic_st->chn_num - 1); i++)
+		{
+			FD_SET(pic_chn[i].fd, &inputs);
+		}
+		if (1 == p_gs_snapshot_thd_param->enlarge_factor)
 		{
 			FD_SET(pic_chn[i].fd, &inputs);
 		}
@@ -646,7 +632,7 @@ static void *snapshot_thread(void *p)
 				default:
 					for (i = 0, j = 0; i < p_s_snapshot_pic_st->chn_num; i++)
 					{
-						if (FD_ISSET(pic_chn[i].fd,&testfds))
+						if (FD_ISSET(pic_chn[i].fd, &testfds))
 						{
 							fd_found[j] = i;
 							j++;
@@ -758,17 +744,6 @@ static S_Result snapshot_trans_config(const Json::Value& config,SNAPSHOT_USER_CO
 			}
 		}
 	}
-	if (config.isMember(PIC_CHN))
-	{
-		for (i = 0; i < CHN_NUM_MAX; i++)
-		{
-			if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
-			{
-				usercfg.chn = i;
-				break;
-			}
-		}
-	}
 	if (config.isMember(SNAPSHOT_MODE))
 	{
 		for (i = 0; i < SNAPSHOT_MODE_MAX; i++)
@@ -866,22 +841,6 @@ static S_Result snapshot_check_config(const Json::Value& config)
 			{
 				S_ret = S_ERROR;
 				printf("status error\n");
-				break;
-			}
-		}
-		if (config.isMember(PIC_CHN))
-		{
-			for (i = 0; i < CHN_NUM_MAX; i++)
-			{
-				if (!(config[PIC_CHN][VALUE].asString()).compare(s_snapshot_chn[i]))
-				{
-					break;
-				}
-			}
-			if (CHN_NUM_MAX == i)
-			{
-				S_ret = S_ERROR;
-				printf("chn error\n");
 				break;
 			}
 		}
