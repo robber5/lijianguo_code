@@ -46,7 +46,7 @@ using namespace detu_record;
 #define REC_MODE "record_mode"
 #define VALUE "value"
 
-#define RECORD_DIVIDE_TIME (3*60*1000*1000) //second
+#define RECORD_DIVIDE_TIME (10*60*1000*1000) //second
 #define PID_NULL			((pthread_t)(-1))
 
 #define PACKET_SIZE_MAX (15*1024*1024)

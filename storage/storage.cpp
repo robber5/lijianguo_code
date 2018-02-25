@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 
 #include "storage.h"
 
@@ -1104,6 +1105,30 @@ S_Result storage_sdcard_format(void)
 
 	return S_ret;
 }
+
+S_Result storage_sdcard_capacity_info(unsigned int *mbFreedisk, unsigned int *mbTotalsize, unsigned int *percent)
+{
+	S_Result S_ret = S_ERROR;
+	unsigned long long freeDisk = 0;
+	unsigned long long totalDisk = 0;
+	struct statfs diskInfo;
+
+	statfs(MOUNT_DIR, &diskInfo);
+	freeDisk = (unsigned long long)(diskInfo.f_bfree) * (unsigned long long)(diskInfo.f_bsize);
+	*mbFreedisk = freeDisk >> 20;
+
+	totalDisk = (unsigned long long)(diskInfo.f_blocks) * (unsigned long long)(diskInfo.f_bsize);
+	*mbTotalsize = totalDisk >> 20;
+
+	*percent = (*mbFreedisk) * 100 / (*mbTotalsize);
+
+	printf ("sdcard: total=%dMB, free=%dMB\n", *mbTotalsize, *mbFreedisk);
+
+
+	return S_ret;
+
+}
+
 
 S_Result storage_sdcard_mount(void)
 {

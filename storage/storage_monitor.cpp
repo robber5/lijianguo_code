@@ -8,6 +8,7 @@
 //该头文件需要放在netlink.h前面防止编译出现__kernel_sa_family未定义
 #include <sys/socket.h>
 #include <linux/netlink.h>
+#include <unistd.h>
 
 #include "config_manager.h"
 #include "defs.h"
@@ -16,13 +17,47 @@
 #define BLK_NAME "mmcblk1p1"
 #define REMOVE "remove@"
 #define ADD "add@"
+#define FREE_SPACE_MARK 4
 
-static pthread_t s_pid = -1;
-
+static pthread_t s_hotplug_pid = -1;
+static pthread_t s_capacity_pid = -1;
 
 using namespace detu_config_manager;
 
-void *storage_sdcard_monitor(void *arg)
+
+void *storage_sdcard_capacity_monitor(void *arg)
+{
+	Json::Value reccfg, snapcfg, response;
+	ConfigManager& config = *ConfigManager::instance();
+	unsigned int mbFreedisk, mbTotalsize, percent;
+	while(1)
+	{
+		storage_sdcard_capacity_info(&mbFreedisk, &mbTotalsize, &percent);
+		if (FREE_SPACE_MARK >= percent)
+		{
+
+			config.getTempConfig("record.status.value", reccfg, response);
+			if (!(reccfg.asString()).compare("start"))
+			{
+				reccfg = "stop";
+				config.setTempConfig("record.status.value", reccfg, response);
+				storage_sdcard_umount();
+			}
+			config.getTempConfig("snapshot.status.value", snapcfg, response);
+			if (!(reccfg.asString()).compare("start"))
+			{
+				snapcfg = "stop";
+				config.setTempConfig("snapshot.status.value", snapcfg, response);
+				storage_sdcard_umount();
+			}
+
+		}
+		usleep(60*1000*1000);
+	}
+
+}
+
+void *storage_sdcard_hotplug_monitor(void *arg)
 {
 	Json::Value reccfg, snapcfg, response;
 	ConfigManager& config = *ConfigManager::instance();
@@ -108,23 +143,37 @@ void *storage_sdcard_monitor(void *arg)
 
 S_Result storage_create_monitor_thread(void)
 {
-	if (0 != pthread_create(&s_pid, NULL, storage_sdcard_monitor, NULL))
+	if (0 != pthread_create(&s_hotplug_pid, NULL, storage_sdcard_hotplug_monitor, NULL))
 	{
 		perror("pthread_create failed");
 		printf("pthread_create get frame thread failed\n");
 		return S_ERROR;
 	}
-	pthread_setname_np(s_pid, "monitor\0");
+	pthread_setname_np(s_hotplug_pid, "s_hotplug\0");
+
+	if (0 != pthread_create(&s_capacity_pid, NULL, storage_sdcard_capacity_monitor, NULL))
+	{
+		perror("pthread_create failed");
+		printf("pthread_create get frame thread failed\n");
+		return S_ERROR;
+	}
+	pthread_setname_np(s_capacity_pid, "s_capacity\0");
+
 
 	return S_OK;
 }
 
 S_Result storage_destroy_monitor_thread(void)
 {
-	if ((unsigned int)-1 != s_pid)
+	if ((unsigned int)-1 != s_hotplug_pid)
 	{
-		pthread_cancel(s_pid);
-		pthread_join(s_pid, 0);
+		pthread_cancel(s_hotplug_pid);
+		pthread_join(s_hotplug_pid, 0);
+	}
+	if ((unsigned int)-1 != s_capacity_pid)
+	{
+		pthread_cancel(s_capacity_pid);
+		pthread_join(s_capacity_pid, 0);
 	}
 
 	return S_OK;

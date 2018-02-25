@@ -22,9 +22,6 @@
 
 #define BAK_DEBUG(format, args...)	printf("%s, %dL: "format, __FUNCTION__, __LINE__, ##args)
 
-#ifdef __cplusplus
-//extern "C" {
-#endif
 
 
 /*
@@ -42,10 +39,8 @@ S_Result storage_module_init(void);
 
 S_Result storage_module_exit(void);
 
+S_Result storage_sdcard_capacity_info(unsigned int *mbFreedisk, unsigned int *mbTotalsize, unsigned int *percent);
 
-#ifdef __cplusplus
-//}
-#endif
 
 #endif  /* _CAL_H_ */
 
