@@ -17,7 +17,7 @@
 #define BLK_NAME "mmcblk1p1"
 #define REMOVE "remove@"
 #define ADD "add@"
-#define FREE_SPACE_MARK 4
+#define FREE_SPACE_MARK 5
 
 static pthread_t s_hotplug_pid = -1;
 static pthread_t s_capacity_pid = -1;
@@ -29,11 +29,12 @@ void *storage_sdcard_capacity_monitor(void *arg)
 {
 	Json::Value reccfg, snapcfg, response;
 	ConfigManager& config = *ConfigManager::instance();
-	unsigned int mbFreedisk, mbTotalsize, percent;
+	unsigned int mbFreedisk, mbTotalsize;
+	float percent;
 	while(1)
 	{
 		storage_sdcard_capacity_info(&mbFreedisk, &mbTotalsize, &percent);
-		if (FREE_SPACE_MARK >= percent)
+		if (FREE_SPACE_MARK > percent)
 		{
 
 			config.getTempConfig("record.status.value", reccfg, response);

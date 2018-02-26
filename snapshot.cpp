@@ -346,6 +346,8 @@ static void snapshot_sr_consult(Uint8_t *packet_in, char *filename)
 
 	yuv_encode_to_jpeg(filename, packet_out, width_out, height_out);
 
+	free(packet_out);
+
 }
 
 static void snapshot_get_stream_fd()
@@ -518,7 +520,7 @@ static void snapshot_pics_alloc(SNAPSHOT_PIC_S *pics)
 	int i = 0;
 	if (NULL == pics->pic_chn)
 	{
-		pics->pic_chn = (SNAPSHOT_PIC_CHN_S *)malloc((pics->chn_num-1) * sizeof(SNAPSHOT_PIC_CHN_S));
+		pics->pic_chn = (SNAPSHOT_PIC_CHN_S *)malloc(pics->chn_num * sizeof(SNAPSHOT_PIC_CHN_S));
 		memset(pics->pic_chn, 0, pics->chn_num * sizeof(SNAPSHOT_PIC_CHN_S));
 		if (NULL != pics->pic_chn)
 		{

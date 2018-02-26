@@ -99,7 +99,8 @@ int yuv_encode_to_jpeg(char* out_file, uint8_t* picture_buf, int in_w,int in_h)
         ret = av_write_frame(pFormatCtx, &pkt);
     }
 
-    av_free_packet(&pkt);
+	av_packet_unref(&pkt);
+    //av_free_packet(&pkt);
     //Write Trailer
     av_write_trailer(pFormatCtx);
 
@@ -112,7 +113,6 @@ int yuv_encode_to_jpeg(char* out_file, uint8_t* picture_buf, int in_w,int in_h)
     }
     avio_close(pFormatCtx->pb);
     avformat_free_context(pFormatCtx);
-	av_packet_unref(&pkt);
 
     return 0;
 }
