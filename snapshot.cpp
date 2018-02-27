@@ -687,6 +687,7 @@ static void *snapshot_thread(void *p)
 									pthread_cond_broadcast(&p_gs_snapshot_thd_param->snapshot_cond.cond);//通知拍照命令执行完成
 								}
 								pthread_mutex_unlock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
+								break;
 							}
 						}
 						else if (SNAPSHOT_MODE_SERIES == p_gs_snapshot_thd_param->snapshot_mode)
