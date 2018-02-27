@@ -63,6 +63,10 @@ using namespace detu_record;
 
 #define FILE_SIZE_MAX (4l*1000*1000*1000)
 
+#define SAVE_SOURCEFILE "save_sourcefile"
+
+#define SAVE_2DFILE "save_2dfile"
+
 
 typedef enum
 {
@@ -96,6 +100,20 @@ typedef enum
 
 } RECORD_MODE_E;
 
+ typedef enum
+{
+	SAVE_2DFILE_OFF,
+	SAVE_2DFILE_ON,
+	SAVE_2DFILE_MAX,
+} SAVE_2DFILE_E;
+
+typedef enum
+{
+	SAVE_SOURCEFILE_OFF,
+	SAVE_SOURCEFILE_ON,
+	SAVE_SOURCEFILE_MAX,
+} SAVE_SOURCEFILE_E;
+
 
 typedef enum
 {
@@ -111,6 +129,8 @@ typedef struct record_config
 	THD_STAT_E thd_stat;
 	CODEC_TYPE_E entype;
 	RECORD_MODE_E record_mode;
+	SAVE_SOURCEFILE_E save_sourcefile;
+	SAVE_2DFILE_E save_2dfile;
 
 } RECORD_USER_CONFIG_S;
 
@@ -136,6 +156,8 @@ typedef struct record_thread_params
 	MediaType       stream_t; //音视频
 	CODEC_TYPE_E		entype;//编码类型
 	RECORD_MODE_E		record_mode;//录像模式
+	SAVE_SOURCEFILE_E save_sourcefile;
+	SAVE_2DFILE_E save_2dfile;
 
 } RECORD_THREAD_PARAMS_S, *p_record_thread_params_s;
 
@@ -169,6 +191,8 @@ typedef struct listinfo_s
 static char s_rec_status[THD_STAT_MAX][16] = {"start", "stop", "quit"};
 static char s_rec_mode[RECORD_MODE_MAX][16] = {"avs", "separate"};
 static char s_video_entype[CODEC_MAX][16] = {"H264", "H265"};
+static char s_save_sourcefile[SAVE_SOURCEFILE_MAX][16] = {"off", "on"};
+static char s_save_2dfile[SAVE_2DFILE_MAX][16] = {"off", "on"};
 
 static char s_video_dir[CHN_COUNT][16] = {AVS_VIDEO_DIR, CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR};
 static FRAMELIST_S *s_framelist_node[CHN_COUNT];
@@ -453,7 +477,7 @@ static void *record_get_frame_thread(void *p)
 
 		record_set_chn(chn, s_p_record_thd_param->entype);
 
-		if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
+		if (SAVE_SOURCEFILE_OFF == s_p_record_thd_param->save_sourcefile)
 		{
 			videoEncoder.getFd(chn[0], fd[0]);
 			for (i = 1; i < CHN_COUNT; i++)
@@ -463,7 +487,6 @@ static void *record_get_frame_thread(void *p)
 		}
 		else
 		{
-			fd[0] = -1;
 			for (i = 0; i < CHN_COUNT; i++)
 			{
 				videoEncoder.getFd(chn[i], fd[i]);
@@ -488,7 +511,7 @@ static void *record_get_frame_thread(void *p)
 
 		sleep(s_p_record_thd_param->delay_time);
 		FD_ZERO(&inputs);//用select函数之前先把集合清零
-		if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
+		if (SAVE_SOURCEFILE_OFF == s_p_record_thd_param->save_sourcefile)
 		{
 			FD_SET(fd[0],&inputs);//把要监测的句柄——fd,加入到集合里
 			fd_max = fd[0];
@@ -634,7 +657,7 @@ static void *record_get_frame_thread(void *p)
 err:
 		if (THD_STAT_START != s_p_record_thd_param->thd_stat)//录像结束关闭MP4文件
 		{
-			if (RECORD_MODE_SINGLE == s_p_record_thd_param->record_mode)
+			if (SAVE_SOURCEFILE_OFF == s_p_record_thd_param->save_sourcefile)
 			{
 				if (NULL != s_framelist_node[0])
 				{
@@ -1126,6 +1149,8 @@ static S_Result record_thread_start(RECORD_USER_CONFIG_S usercfg)
 		s_p_record_thd_param->delay_time = usercfg.delay_time;
 		s_p_record_thd_param->entype = usercfg.entype;
 		s_p_record_thd_param->record_mode = usercfg.record_mode;
+		s_p_record_thd_param->save_2dfile = usercfg.save_2dfile;
+		s_p_record_thd_param->save_sourcefile = usercfg.save_sourcefile;
 		pthread_cond_broadcast(&s_p_record_thd_param->record_cond.cond);
 		do
 		{
@@ -1200,6 +1225,30 @@ static S_Result record_trans_config(const Json::Value& config,RECORD_USER_CONFIG
 		usercfg.delay_time = config[DELAY_TIME][VALUE].asUInt();
 	}
 
+	if (config.isMember(SAVE_2DFILE))
+	{
+		for (i = 0; i < SAVE_2DFILE_MAX; i++)
+		{
+			if (!(config[SAVE_2DFILE][VALUE].asString()).compare(s_save_2dfile[i]))
+			{
+				usercfg.save_2dfile = (SAVE_2DFILE_E)i;
+				break;
+			}
+		}
+	}
+
+	if (config.isMember(SAVE_SOURCEFILE))
+	{
+		for (i = 0; i < SAVE_SOURCEFILE_MAX; i++)
+		{
+			if (!(config[SAVE_SOURCEFILE][VALUE].asString()).compare(s_save_sourcefile[i]))
+			{
+				usercfg.save_sourcefile = (SAVE_SOURCEFILE_E)i;
+				break;
+			}
+		}
+	}
+
 	return S_OK;
 
 }
@@ -1260,6 +1309,40 @@ static S_Result record_check_config(const Json::Value& config)
 				break;
 			}
 		}
+		if (config.isMember(SAVE_SOURCEFILE))
+		{
+			for (i = 0; i < SAVE_SOURCEFILE_MAX; i++)
+			{
+				if (!(config[SAVE_SOURCEFILE][VALUE].asString()).compare(s_save_sourcefile[i]))
+				{
+					break;
+				}
+			}
+			if (SAVE_SOURCEFILE_MAX == i)
+			{
+				S_ret = S_ERROR;
+				printf("save_sourcefile error\n");
+				break;
+			}
+		}
+		if (config.isMember(SAVE_2DFILE))
+		{
+			for (i = 0; i < SAVE_2DFILE_MAX; i++)
+			{
+				if (!(config[SAVE_2DFILE][VALUE].asString()).compare(s_save_2dfile[i]))
+				{
+					break;
+				}
+
+			}
+			if (SAVE_2DFILE_MAX == i)
+			{
+				S_ret = S_ERROR;
+				printf("save_2dfile error\n");
+				break;
+			}
+		}
+
 		if (0 > delay_time)
 		{
 			S_ret = S_ERROR;
@@ -1304,6 +1387,8 @@ static S_Result record_param_init(void)
 	s_p_record_thd_param->stream_t = MEDIA_TYPE_VIDEO;
 	s_p_record_thd_param->entype = usercfg.entype;
 	s_p_record_thd_param->record_mode = usercfg.record_mode;
+	s_p_record_thd_param->save_2dfile = usercfg.save_2dfile;
+	s_p_record_thd_param->save_sourcefile = usercfg.save_sourcefile;
 	pthread_mutex_init(&s_p_record_thd_param->mutex, NULL);
 	record_cond_init(&s_p_record_thd_param->record_cond);
 
@@ -1411,6 +1496,7 @@ static S_Result record_thread_cb(const void* clientData, const std::string& name
 	do
 	{
 		printf("set status:%s, old status:%s!\n", newConfig.toStyledString().c_str(), oldConfig.toStyledString().c_str());
+		printf("newcfg: %d\n", newcfg.save_sourcefile);
 		if (newcfg.thd_stat != oldcfg.thd_stat)
 		{
 			if (THD_STAT_STOP == newcfg.thd_stat)
