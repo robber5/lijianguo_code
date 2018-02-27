@@ -177,6 +177,8 @@ static VideoInputMgr& s_videoinput = *VideoInputMgr::instance();
 #define CHN_NUM_MAX 7
 
 
+static Json::Value s_filelist;
+
 static char s_snapshot_status[THD_STAT_MAX][16] = {"start", "stop", "quit"};
 static char s_snapshot_mode[SNAPSHOT_MODE_MAX][16] = {"single", "series"};
 static char s_snapshot_chn[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_1080P, AVS_VIDEO_DIR, "avsSr"};
@@ -195,6 +197,34 @@ static char s_save_2dfile[SAVE_2DFILE_MAX][16] = {"off", "on"};
 static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg);
 
 static S_Result snapshot_thread_stop();
+
+static S_Result snapshot_set_sourcefile_name()
+{
+	int i = 0;
+
+	if (SAVE_SOURCEFILE_ON == p_gs_snapshot_thd_param->save_sourcefile)
+	{
+		for (i = 0; i < ORIGINAL_CHN_NUM; i++)
+		{
+			s_filelist[i]["id"] = i;
+			s_filelist[i]["path"] = p_s_snapshot_pic_chn_st[i].filename;
+		}
+	}
+	else
+	{
+		s_filelist["result"] = "no source file";
+	}
+
+	return S_OK;
+}
+
+
+static S_Result snapshot_get_sourcefile_name(Json::Value& response)
+{
+	response = s_filelist;
+
+	return S_OK;
+}
 
 static S_Result snapshot_get_jpeg_filename(char *filename, int index)
 {
@@ -687,6 +717,7 @@ static void *snapshot_thread(void *p)
 									pthread_cond_broadcast(&p_gs_snapshot_thd_param->snapshot_cond.cond);//通知拍照命令执行完成
 								}
 								pthread_mutex_unlock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
+								snapshot_set_sourcefile_name();
 								break;
 							}
 						}
@@ -968,7 +999,12 @@ static S_Result snapshot_thread_cb(const void* clientData, const std::string& na
 					config.getTempConfig("snapshot.status.value", snapcfg, response);
 					snapcfg = "stop";
 					config.setTempConfig("snapshot.status.value", snapcfg, response);
+					response["result"] = "start failed";
 					S_ret = S_ERROR;
+				}
+				else
+				{
+					snapshot_get_sourcefile_name(response);
 				}
 				break;
 			}
