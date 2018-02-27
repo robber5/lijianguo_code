@@ -719,7 +719,7 @@ static void *record_flush_cache_thread(void *p)//每写四次gop，flush一次
 		}
 		while (THD_STAT_START == s_p_record_thd_param->thd_stat)
 		{
-			sleep(60);
+			sleep(10);
 			sync();
 			system(FLUSH_CMD);
 		}

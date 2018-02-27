@@ -5,6 +5,10 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include "storage.h"
 
@@ -892,6 +896,128 @@ int storage_format_sdcard(char *devname)
 }
 #endif
 
+
+static long openmax = 0;
+
+/*
+ * If OPEN_MAX is indeterminate, we're not
+ * guaranteed that this is adequate.
+ */
+#define OPEN_MAX_GUESS 1024
+
+long open_max(void)
+{
+    if (openmax == 0) {      /* first time through */
+        errno = 0;
+        if ((openmax = sysconf(_SC_OPEN_MAX)) < 0) {
+           if (errno == 0)
+               openmax = OPEN_MAX_GUESS;    /* it's indeterminate */
+           else
+               printf("sysconf error for _SC_OPEN_MAX");
+        }
+    }
+
+    return(openmax);
+}
+
+static pid_t    *childpid = NULL;  /* ptr to array allocated at run-time */
+static int      maxfd;  /* from our open_max(), {Prog openmax} */
+
+FILE *vpopen(const char* cmdstring, const char *type)
+{
+    int pfd[2];
+    FILE *fp;
+    pid_t   pid;
+
+    if((type[0]!='r' && type[0]!='w')||type[1]!=0)
+    {
+        errno = EINVAL;
+        return(NULL);
+    }
+
+    if (childpid == NULL) {     /* first time through */
+                /* allocate zeroed out array for child pids */
+        maxfd = open_max();
+        if ( (childpid = (pid_t *)calloc(maxfd, sizeof(pid_t))) == NULL)
+            return(NULL);
+    }
+
+    if(pipe(pfd)!=0)
+    {
+        return NULL;
+    }
+
+    if((pid = vfork())<0)
+    {
+        return(NULL);   /* errno set by fork() */
+    }
+    else if (pid == 0) {    /* child */
+        if (*type == 'r')
+        {
+            close(pfd[0]);
+            if (pfd[1] != STDOUT_FILENO) {
+                dup2(pfd[1], STDOUT_FILENO);
+                close(pfd[1]);
+            }
+        }
+        else
+        {
+            close(pfd[1]);
+            if (pfd[0] != STDIN_FILENO) {
+                dup2(pfd[0], STDIN_FILENO);
+                close(pfd[0]);
+            }
+        }
+
+        /* close all descriptors in childpid[] */
+        for (int i = 0; i < maxfd; i++)
+        if (childpid[ i ] > 0)
+            close(i);
+
+        execl("/bin/sh", "sh", "-c", cmdstring, (char *) 0);
+        _exit(127);
+    }
+
+    if (*type == 'r') {
+        close(pfd[1]);
+        if ( (fp = fdopen(pfd[0], type)) == NULL)
+            return(NULL);
+    } else {
+        close(pfd[0]);
+        if ( (fp = fdopen(pfd[1], type)) == NULL)
+            return(NULL);
+    }
+
+    childpid[fileno(fp)] = pid; /* remember child pid for this fd */
+    return(fp);
+}
+
+
+int vpclose(FILE *fp)
+{
+    int     fd, stat;
+    pid_t   pid;
+
+    if (childpid == NULL)
+        return(-1);     /* popen() has never been called */
+
+    fd = fileno(fp);
+    if ( (pid = childpid[fd]) == 0)
+        return(-1);     /* fp wasn't opened by popen() */
+
+    childpid[fd] = 0;
+    if (fclose(fp) == EOF)
+        return(-1);
+
+    while (waitpid(pid, &stat, 0) < 0)
+        if (errno != EINTR)
+            return(-1); /* error other than EINTR from waitpid() */
+
+    return(stat);   /* return child's termination status */
+
+}
+
+
 #define DIR_COUNT 5
 
 static const char rec_dir[DIR_COUNT][8] = {AVS_VIDEO_DIR, CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR};
@@ -946,9 +1072,9 @@ static S_Result storage_sdcard_mount_check(void)
 	char line[128], tmp[16];
 	char *blkname = NULL;
 
-	if (NULL == (fp = popen("df -h", "r")))
+	if (NULL == (fp = vpopen("df -h", "r")))
 	{
-		perror("popen:");
+		perror("vpopen:");
 		return S_ret;
 	}
 
@@ -964,7 +1090,7 @@ static S_Result storage_sdcard_mount_check(void)
 		}
 	}
 
-	pclose(fp);
+	vpclose(fp);
 
 	return S_ret;
 
@@ -1093,14 +1219,14 @@ S_Result storage_sdcard_format(void)
 
 	snprintf(cmd, 64, "%s %s", "mkfs.vfat", DEV_NAME);
 
-	if (NULL != (fp = popen(cmd, "r")))
+	if (NULL != (fp = vpopen(cmd, "r")))
 	{
 		S_ret = S_OK;
-		pclose(fp);
+		vpclose(fp);
 	}
 	else
 	{
-		perror("popen:");
+		perror("vpopen:");
 	}
 
 	return S_ret;
