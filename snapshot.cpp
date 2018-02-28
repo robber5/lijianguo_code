@@ -212,7 +212,12 @@ static S_Result snapshot_set_sourcefile_name()
 	}
 	else
 	{
-		s_filelist = "no source file";
+		for (i = 0; i < ORIGINAL_CHN_NUM; i++)
+		{
+			s_filelist[i]["id"] = i;
+			s_filelist[i]["path"] = "";
+		}
+
 	}
 
 	return S_OK;
