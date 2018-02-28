@@ -176,6 +176,13 @@ static VideoInputMgr& s_videoinput = *VideoInputMgr::instance();
 #define CHN_COUNT 6
 #define CHN_NUM_MAX 7
 
+#define PID_NULL			((pthread_t)(-1))
+
+#define PIC_COUNT_MIN 35
+
+#define ORIGINAL_CHN_NUM 4
+#define AVS_CHN_COUNT 2
+
 
 static Json::Value s_filelist;
 
@@ -186,13 +193,6 @@ static char s_snapshot_chn[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2
 static char s_picture_dir[CHN_NUM_MAX][16] = {CH0_VIDEO_DIR, CH1_VIDEO_DIR, CH2_VIDEO_DIR, CH3_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR, AVS_VIDEO_DIR};
 static char s_save_sourcefile[SAVE_SOURCEFILE_MAX][16] = {"off", "on"};
 static char s_save_2dfile[SAVE_2DFILE_MAX][16] = {"off", "on"};
-
-#define PID_NULL			((pthread_t)(-1))
-
-#define PIC_COUNT_MIN 35
-
-#define ORIGINAL_CHN_NUM 4
-#define AVS_CHN_COUNT 2
 
 static S_Result snapshot_thread_start(SNAPSHOT_USER_CONFIG_S usercfg);
 
@@ -212,7 +212,7 @@ static S_Result snapshot_set_sourcefile_name()
 	}
 	else
 	{
-		s_filelist["result"] = "no source file";
+		s_filelist = "no source file";
 	}
 
 	return S_OK;
@@ -221,7 +221,7 @@ static S_Result snapshot_set_sourcefile_name()
 
 static S_Result snapshot_get_sourcefile_name(Json::Value& response)
 {
-	response = s_filelist;
+	response["filelist"] = s_filelist;
 
 	return S_OK;
 }
@@ -710,6 +710,7 @@ static void *snapshot_thread(void *p)
 								snapshot_stop_stream(pic_chn);
 								FD_ZERO(&inputs);
 								snapshot_save_pic_to_sdcard();
+								snapshot_set_sourcefile_name();
 								pthread_mutex_lock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
 								if (FALSE == p_gs_snapshot_thd_param->snapshot_cond.wake)
 								{
@@ -717,7 +718,6 @@ static void *snapshot_thread(void *p)
 									pthread_cond_broadcast(&p_gs_snapshot_thd_param->snapshot_cond.cond);//通知拍照命令执行完成
 								}
 								pthread_mutex_unlock(&p_gs_snapshot_thd_param->snapshot_cond.mutex);
-								snapshot_set_sourcefile_name();
 								break;
 							}
 						}
@@ -999,12 +999,12 @@ static S_Result snapshot_thread_cb(const void* clientData, const std::string& na
 					config.getTempConfig("snapshot.status.value", snapcfg, response);
 					snapcfg = "stop";
 					config.setTempConfig("snapshot.status.value", snapcfg, response);
-					response["result"] = "start failed";
 					S_ret = S_ERROR;
 				}
 				else
 				{
 					snapshot_get_sourcefile_name(response);
+					//printf("response:%s!\n", response.toStyledString().c_str());
 				}
 				break;
 			}
