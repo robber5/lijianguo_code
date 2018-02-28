@@ -17,7 +17,6 @@
 #define BLK_NAME "mmcblk1p1"
 #define REMOVE "remove@"
 #define ADD "add@"
-#define FREE_SPACE_MARK 5
 
 static pthread_t s_hotplug_pid = -1;
 static pthread_t s_capacity_pid = -1;
@@ -33,7 +32,16 @@ void *storage_sdcard_capacity_monitor(void *arg)
 	float percent;
 	while(1)
 	{
-		storage_sdcard_capacity_info(&mbFreedisk, &mbTotalsize, &percent);
+		if (S_ERROR == storage_sdcard_mount_check())
+		{
+			mbFreedisk = 0;
+			mbTotalsize = 0;
+			percent = 0;
+		}
+		else
+		{
+			storage_sdcard_capacity_info(&mbFreedisk, &mbTotalsize, &percent);
+		}
 		if (FREE_SPACE_MARK > percent)
 		{
 
@@ -42,18 +50,16 @@ void *storage_sdcard_capacity_monitor(void *arg)
 			{
 				reccfg = "stop";
 				config.setTempConfig("record.status.value", reccfg, response);
-				storage_sdcard_umount();
 			}
 			config.getTempConfig("snapshot.status.value", snapcfg, response);
 			if (!(reccfg.asString()).compare("start"))
 			{
 				snapcfg = "stop";
 				config.setTempConfig("snapshot.status.value", snapcfg, response);
-				storage_sdcard_umount();
 			}
-
+			printf("sd_card free space is smaller than %d%%\n", FREE_SPACE_MARK);
 		}
-		usleep(60*1000*1000);
+		usleep(10*1000*1000);
 	}
 
 }
@@ -124,14 +130,12 @@ void *storage_sdcard_hotplug_monitor(void *arg)
 				{
 					reccfg = "stop";
 					config.setTempConfig("record.status.value", reccfg, response);
-					storage_sdcard_umount();
 				}
 				config.getTempConfig("snapshot.status.value", snapcfg, response);
 				if (!(reccfg.asString()).compare("start"))
 				{
 					snapcfg = "stop";
 					config.setTempConfig("snapshot.status.value", snapcfg, response);
-					storage_sdcard_umount();
 				}
 				//printf("remove the sd_card\n");
 			}

@@ -763,7 +763,7 @@ static void *record_write_mp4_thread(void *p)
 	memset(filename, 0, FILE_NAME_LEN_MAX);
 	FRAMELIST_S *framelist_node = NULL;
 
-	VideoParamter video_param = {AV_CODEC_ID_H264, 3840, 2160};
+	VideoParamter video_param = {AV_CODEC_ID_H264, 3840, 1920};
 	AudioParamter audio_param = {AV_CODEC_ID_NONE, 0, 0, 0};
 
 	while (s_record_enable_flag)

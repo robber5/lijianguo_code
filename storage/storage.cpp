@@ -1065,7 +1065,7 @@ static S_Result storage_sdcard_dev_block_check(void)
 
 */
 
-static S_Result storage_sdcard_mount_check(void)
+S_Result storage_sdcard_mount_check(void)
 {
 	S_Result S_ret = S_ERROR;
 	FILE *fp;
@@ -1166,6 +1166,30 @@ static S_Result storage_sdcard_dir_check(void)
 	return S_ret;
 }
 
+S_Result storage_sdcard_capacity_info(unsigned int *mbFreedisk, unsigned int *mbTotalsize, float *percent)
+{
+	S_Result S_ret = S_ERROR;
+	unsigned long long freeDisk = 0;
+	unsigned long long totalDisk = 0;
+	struct statfs diskInfo;
+
+	statfs(MOUNT_DIR, &diskInfo);
+	freeDisk = (unsigned long long)(diskInfo.f_bfree) * (unsigned long long)(diskInfo.f_bsize);
+	*mbFreedisk = freeDisk >> 20;
+
+	totalDisk = (unsigned long long)(diskInfo.f_blocks) * (unsigned long long)(diskInfo.f_bsize);
+	*mbTotalsize = totalDisk >> 20;
+
+	*percent = (float)(*mbFreedisk) * 100 / (*mbTotalsize);
+
+	printf ("sdcard: total=%dMB, free=%dMB, percent:%f\n", *mbTotalsize, *mbFreedisk, *percent);
+
+
+	return S_ret;
+
+}
+
+
 /*
 
 sd卡检测
@@ -1174,6 +1198,8 @@ sd卡检测
 S_Result storage_sdcard_check(void)
 {
 	S_Result S_ret = S_ERROR;
+	unsigned int mbFreedisk, mbTotalsize;
+	float percent;
 
 	do
 	{
@@ -1194,6 +1220,15 @@ S_Result storage_sdcard_check(void)
 				break;
 			}
 		}
+
+		S_ret = storage_sdcard_capacity_info(&mbFreedisk, &mbTotalsize, &percent);
+		if (FREE_SPACE_MARK > percent)
+		{
+			printf("sd_card free space is smaller than %d%%\n", FREE_SPACE_MARK);
+			S_ret = S_ERROR;
+			break;
+		}
+
 		S_ret = storage_sdcard_dir_check();
 		if (S_ERROR == S_ret)
 		{
@@ -1231,39 +1266,6 @@ S_Result storage_sdcard_format(void)
 
 	return S_ret;
 }
-
-S_Result storage_sdcard_capacity_info(unsigned int *mbFreedisk, unsigned int *mbTotalsize, float *percent)
-{
-	S_Result S_ret = S_ERROR;
-	unsigned long long freeDisk = 0;
-	unsigned long long totalDisk = 0;
-	struct statfs diskInfo;
-
-	if (S_ERROR == storage_sdcard_mount_check())
-	{
-		*mbFreedisk = 0;
-		*mbTotalsize = 0;
-		*percent = 0;
-	}
-	else
-	{
-		statfs(MOUNT_DIR, &diskInfo);
-		freeDisk = (unsigned long long)(diskInfo.f_bfree) * (unsigned long long)(diskInfo.f_bsize);
-		*mbFreedisk = freeDisk >> 20;
-
-		totalDisk = (unsigned long long)(diskInfo.f_blocks) * (unsigned long long)(diskInfo.f_bsize);
-		*mbTotalsize = totalDisk >> 20;
-
-		*percent = (float)(*mbFreedisk) * 100 / (*mbTotalsize);
-	}
-
-	printf ("sdcard: total=%dMB, free=%dMB, percent:%f\n", *mbTotalsize, *mbFreedisk, *percent);
-
-
-	return S_ret;
-
-}
-
 
 S_Result storage_sdcard_mount(void)
 {
