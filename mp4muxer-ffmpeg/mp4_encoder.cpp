@@ -247,6 +247,11 @@ bool Mp4Encoder::InitHeader()
 
 int Mp4Encoder::WriteOneFrame(int media_type, char *frame, int length, int pts)
 {
+	if (nullptr == ofmt_ctx_)
+	{
+		printf("AVFormatContext is null\n");
+		return -1;
+	}
 	if (frame == nullptr || length < 1 || pts < 0)
 	{
 		DBG_INFO("Invalid input paramter\n");
@@ -282,6 +287,11 @@ void Mp4Encoder::Release()
 
 int Mp4Encoder::WriteVideoFrame(char *frame, int length, int pts)
 {
+	if (nullptr == ofmt_ctx_)
+	{
+		printf("AVFormatContext is null\n");
+		return -1;
+	}
 	if (!video_enable_)
 	{
 		DBG_INFO("Record video disabled\n");
@@ -409,6 +419,11 @@ int Mp4Encoder::WriteVideoFrame(char *frame, int length, int pts)
 
 int Mp4Encoder::WriteAudioFrame(char *frame, int length, int pts)
 {
+	if (nullptr == ofmt_ctx_)
+	{
+		printf("AVFormatContext is null\n");
+		return -1;
+	}
 	if (!audio_enable_)
 	{
 		DBG_INFO("Record audio disabled\n");
