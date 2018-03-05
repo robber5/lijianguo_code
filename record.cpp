@@ -802,6 +802,7 @@ static void *record_write_mp4_thread(void *p)
 				if (0 != (mp4_encoder[chn].WriteVideoFrame((char*)framelist_node->frame + offset, framelist_node->packetSize[i], framelist_node->pts[i])))
 				{
 					DBG_INFO("Write video frame failed\n");
+					break;
 				}
 				offset += framelist_node->packetSize[i];
 			}

@@ -283,6 +283,7 @@ void Mp4Encoder::Release()
 		avio_close(ofmt_ctx_->pb);
 
 	avformat_free_context(ofmt_ctx_);
+	ofmt_ctx_ = nullptr;
 }
 
 int Mp4Encoder::WriteVideoFrame(char *frame, int length, int pts)
