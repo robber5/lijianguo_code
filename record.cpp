@@ -516,6 +516,7 @@ static void *record_get_frame_thread(void *p)
 			FD_SET(fd[0],&inputs);//把要监测的句柄——fd,加入到集合里
 			fd_max = fd[0];
 			videoEncoder.startRecvStream(chn[0]);
+			videoEncoder.requestIDR(chn[0]);
 			chn_num = 1;
 		}
 		else
@@ -524,6 +525,7 @@ static void *record_get_frame_thread(void *p)
 			for (i = 0; i < CHN_COUNT; i++)
 			{
 				videoEncoder.startRecvStream(chn[i]);
+				videoEncoder.requestIDR(chn[i]);
 				FD_SET(fd[i],&inputs);
 			}
 			chn_num = CHN_COUNT;
@@ -629,21 +631,26 @@ static void *record_get_frame_thread(void *p)
 							framelist_node->pts[frame_count] = (pts - start_time[index])/1000;
 						}
 						framelist_node->packetSize[frame_count] += packetSize;
-						if (Is_gopsize_reach_mark(framelist_node->gopsize) || ((FRAME_COUNT_MAX - 1) <= framelist_node->frame_count))
+						if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
+						{
+							framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
+							start_time[index] = 0;
+							file_size[index] = 0;
+							videoEncoder.requestIDR(chn[index]);
+							record_add_gop(framelist_node);
+							s_framelist_node[index] = NULL;//处理完数据指针置为NULL
+							printf("time reach mark!\n");
+						}
+						else if (Is_gopsize_reach_mark(framelist_node->gopsize) || ((FRAME_COUNT_MAX - 1) <= framelist_node->frame_count))
 						{
 							file_size[index] += framelist_node->gopsize;
-							if (s_p_record_thd_param->divide_time <= (pts -start_time[index]))//分时功能
+
+							if (FILE_SIZE_MAX <= file_size[index])//文件大小不能超过2G
 							{
 								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
 								start_time[index] = 0;
 								file_size[index] = 0;
-								printf("time reach mark!\n");
-							}
-							else if (FILE_SIZE_MAX <= file_size[index])//文件大小不能超过2G
-							{
-								framelist_node->last = TRUE;//最后一组gop，关闭MP4文件
-								start_time[index] = 0;
-								file_size[index] = 0;
+								videoEncoder.requestIDR(chn[index]);
 								printf("file size reach mark!\n");
 							}
 							record_add_gop(framelist_node);
